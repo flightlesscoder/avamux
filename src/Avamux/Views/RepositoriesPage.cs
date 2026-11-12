@@ -1,0 +1,1156 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Input;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Platform.Storage;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using Avamux.Core;
+using Avamux.Core.Repos;
+using Avamux.Core.Terminal;
+using Avamux.Core.Text;
+using Avamux.Core.Watching;
+using Avamux.Plugins;
+
+namespace Avamux.Views;
+
+/// <summary>
+/// Git for one configured repository or all of them: changes (staged and not), history, branches and pull
+/// requests on the left; a diff, file or commit list on the right.
+/// </summary>
+public sealed class RepositoriesPage : UserControl, IPage
+{
+    private enum Tab { Changes, History, Branches, PullRequests }
+    private enum RowKind { Meta, FileHeader, Hunk, Context, Add, Del, Note, Code, Log, Info }
+
+    /// <summary>One line of the right-hand pane.</summary>
+    private sealed record Row(RowKind Kind, string Text, int? Old = null, int? New = null, DiffLine? Diff = null, IReadOnlyList<Core.Text.Span>? Spans = null, bool Marked = false, RepoCommit? Commit = null);
+    private sealed record RepoChoice(string? Id, string Label);
+    private sealed record BranchChoice(RepoBranch? Branch, string Label);
+    /// <summary>A changed file as listed on the left: the same file can appear under Staged and under Changes.</summary>
+    private sealed record ChangeRef(RepoChange Change, bool Staged);
+    private sealed record CommitRef(string RepoId, RepoCommit Commit);
+    private sealed record CommitFileRef(string RepoId, string Hash, RepoCommitFile File);
+    private sealed record BranchRef(string RepoId, RepoBranch Branch);
+    private sealed record PrRef(string RepoId, WatchItem Watch, WatchResultItem Item);
+    private sealed record HeaderRef(RepoEntry Repo);
+    private sealed record CommitView(RepoEntry Repo, RepoCommitInfo Info, IReadOnlyList<RepoCommitFile> Files);
+
+    private readonly ComboBox _picker = new() { MinWidth = 240 };
+    private readonly ComboBox _branchPicker = new() { MinWidth = 180, PlaceholderText = "Branch" };
+    private readonly ListBox _list = new() { Classes = { "plain" } };
+    private readonly ListBox _diff = new() { Classes = { "rows" } };
+    private readonly TextBlock _diffTitle = new() { FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, FontFamily = Ui.Mono, FontSize = 12.5 };
+    private readonly TextBlock _diffSub = new() { Foreground = Ui.Dim, FontSize = 11.5, TextTrimming = TextTrimming.CharacterEllipsis, IsVisible = false };
+    private readonly Button _stage, _edit, _remove, _diffMode, _fileModeButton, _open, _commitButton;
+    private readonly Button[] _tabs;
+    private readonly CheckBox _mine = new() { Content = "Only mine", FontSize = 12.5 }, _active = new() { Content = "Only active", FontSize = 12.5 };
+    private readonly Border _prBar;
+    private readonly StackPanel _empty;
+    private readonly Grid _main;
+
+    private string? _repoId;     // null = all repositories
+    private Tab _tab = Tab.Changes;
+    private bool _building, _fileMode, _refreshing, _refreshAgain;
+    private string _repoSignature = "", _branchSignature = "";
+    private ChangeRef? _change;
+    private CommitRef? _commit;
+    private CommitView? _view;           // a commit being looked into: its files are listed on the left
+    private CommitFileRef? _viewFile;
+    private BranchRef? _branch;
+    private PrRef? _pr;
+    private (string RepoId, string Path, int Line)? _file;   // a plain file shown from Search
+    private object? _lastSelected;
+    private string _diffText = "";
+    private string? _openLink;
+    private DiffDoc? _doc;               // the diff on screen, when hunks and lines of it can be staged
+    private RepoEntry? _docRepo;
+    private bool _docStaged;
+    private int _generation;
+
+    private static RepoService Repos => App.Services.Repos;
+    private static WatchService Watches => App.Services.Watches;
+    private static UiStateStore State => App.Services.Ui;
+
+    public RepositoriesPage()
+    {
+        _picker.ItemTemplate = new FuncDataTemplate<RepoChoice>((c, _) => new TextBlock { Text = c?.Label ?? "", TextTrimming = TextTrimming.CharacterEllipsis }, false);
+        _branchPicker.ItemTemplate = new FuncDataTemplate<BranchChoice>((c, _) => new TextBlock { Text = c?.Label ?? "", TextTrimming = TextTrimming.CharacterEllipsis }, false);
+        _picker.SelectionChanged += (_, _) =>
+        {
+            if (_building || _picker.SelectedItem is not RepoChoice choice || choice.Id == _repoId) return;
+            _repoId = choice.Id;
+            ClearSelection();
+            // Refresh after the combo box has finished its own selection work; rebuilding it from inside this
+            // handler is what used to leave it with a single entry and the list showing the old repository.
+            Dispatcher.UIThread.Post(() => _ = RefreshAsync());
+        };
+        _branchPicker.SelectionChanged += (_, _) =>
+        {
+            if (_building || _branchPicker.SelectedItem is not BranchChoice { Branch: { IsCurrent: false } branch } || CurrentRepo is not { } repo) return;
+            Dispatcher.UIThread.Post(() => _ = Ui.TryAsync(this, async () =>
+            {
+                try { await Repos.SwitchAsync(repo, branch); Ui.Toast(this, "Switched branch", $"{repo.Name} is now on {branch.Name}"); }
+                finally { _branchSignature = ""; await RefreshAsync(); }
+            }, "Could not switch branch"));
+        };
+        _list.SelectionChanged += (_, _) =>
+        {
+            if (_building) return;
+            var tag = (_list.SelectedItem as Control)?.Tag;
+            if (tag is HeaderRef or null)
+            {
+                // Headers are there to be right-clicked, not selected: put the selection back.
+                _building = true;
+                try { _list.SelectedItem = _list.Items.OfType<ListBoxItem>().FirstOrDefault(i => ReferenceEquals(i.Tag, _lastSelected)); } finally { _building = false; }
+                return;
+            }
+            Select(tag);
+            _ = ShowAsync();
+        };
+        _diff.ItemTemplate = new FuncDataTemplate<Row>((row, _) => row is null ? new Panel() : BuildRow(row), false);
+        _diff.AddHandler(ContextRequestedEvent, OnDiffContext, Avalonia.Interactivity.RoutingStrategies.Bubble);
+        _diff.DoubleTapped += (_, _) =>
+        {
+            if (_diff.SelectedItem is Row { Commit: { } c } && _branch is { } b && Repos.Find(b.RepoId) is { } repo) _ = ViewCommitAsync(repo, c.Hash);
+        };
+        ScrollViewer.SetHorizontalScrollBarVisibility(_diff, Avalonia.Controls.Primitives.ScrollBarVisibility.Auto);
+
+        _stage = Ui.TextButton("Stage", () => _ = StageSelectedAsync());
+        _edit = Ui.IconButton(Icons.Pencil, "Open the file in the editor (repositories.editor) in a terminal tab", EditFile, "Edit");
+        _open = Ui.IconButton(Icons.OpenInNew, "Open in the browser", () => { if (_openLink is { } l) Shell.Open(l); }, "Open");
+        _diffMode = Ui.TextButton("Diff", () => { _fileMode = false; _ = ShowAsync(); }, "Show what changed");
+        _fileModeButton = Ui.TextButton("File", () => { _fileMode = true; _ = ShowAsync(); }, "Show the whole file with syntax highlighting and line numbers");
+        _remove = Ui.IconButton(Icons.Delete, "Remove the selected repository from the list (files are not touched)", () => _ = RemoveAsync());
+        _commitButton = Ui.IconButton(Icons.Check, "Commit what is staged", () => _ = CommitAsync(CurrentRepo), "Commit");
+        _tabs = new[] { "Changes", "History", "Branches", "Pull Requests" }.Select((label, i) =>
+        {
+            var b = new Button { Content = label, Classes = { "tab" } };
+            b.Click += (_, _) => { _tab = (Tab)i; _view = null; _viewFile = null; _file = null; _ = RefreshAsync(); };
+            return b;
+        }).ToArray();
+
+        _mine.IsChecked = State.Data.PullRequestsMineOnly;
+        _active.IsChecked = State.Data.PullRequestsActiveOnly;
+        void Filters()
+        {
+            State.Data.PullRequestsMineOnly = _mine.IsChecked == true;
+            State.Data.PullRequestsActiveOnly = _active.IsChecked == true;
+            State.SaveSoon();
+            _ = RefreshAsync();
+        }
+        _mine.IsCheckedChanged += (_, _) => { if (!_building) Filters(); };
+        _active.IsCheckedChanged += (_, _) => { if (!_building) Filters(); };
+        ToolTip.SetTip(_mine, "Show only pull requests that are yours");
+        ToolTip.SetTip(_active, "Hide merged, closed and abandoned pull requests");
+        _prBar = new Border
+        {
+            Padding = new Thickness(12, 4), BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 0, 1), IsVisible = false,
+            Child = new DockPanel
+            {
+                Children =
+                {
+                    Ui.IconButton(Icons.Refresh, "Check for pull requests now", () => _ = CheckPullRequestsAsync()).Dock(Dock.Right),
+                    Ui.Row(16, _mine, _active),
+                },
+            },
+        };
+
+        var left = new DockPanel
+        {
+            Children =
+            {
+                new Border
+                {
+                    Padding = new Thickness(6, 0), BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 0, 1),
+                    Child = new DockPanel { Children = { _commitButton.Dock(Dock.Right), Ui.Row(0, _tabs) } },
+                }.Dock(Dock.Top),
+                _prBar.Dock(Dock.Top),
+                _list,
+            },
+        };
+        var right = new DockPanel
+        {
+            Children =
+            {
+                new Border
+                {
+                    Padding = new Thickness(12, 6), BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 0, 1),
+                    Child = new DockPanel
+                    {
+                        Children =
+                        {
+                            Ui.Row(4, Ui.Row(0, _diffMode, _fileModeButton), _stage, _edit, _open,
+                                Ui.IconButton(Icons.Console, "Open a terminal in this repository", OpenTerminal, "Terminal"),
+                                Ui.TextButton("Copy", () => _ = App.Services.Host.SetClipboardAsync(_diffText), "Copy what is shown to the clipboard")).Dock(Dock.Right),
+                            new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { _diffTitle, _diffSub } },
+                        },
+                    },
+                }.Dock(Dock.Top),
+                _diff,
+            },
+        };
+        _main = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("500,*"),
+            Children =
+            {
+                new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 1, 0), Child = left },
+                new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 0, 0), Child = right }.At(0, 1),
+            },
+        };
+        _empty = new StackPanel
+        {
+            Margin = new Thickness(28), Spacing = 10, MaxWidth = 620, HorizontalAlignment = HorizontalAlignment.Left,
+            Children =
+            {
+                Ui.Text("No repositories yet", "h2"),
+                Ui.Text("Add any number of git repositories, then browse the changes of one of them or of all at once, and open files in vim or neovim.", "dim"),
+                Ui.Apply(Ui.TextButton("Add repository", () => _ = AddAsync()), b => b.HorizontalAlignment = HorizontalAlignment.Left),
+            },
+        };
+
+        ToolTip.SetTip(_branchPicker, "Switch branch");
+        Content = new DockPanel
+        {
+            Children =
+            {
+                Ui.Header("Repositories", "Git changes, history, branches and pull requests for one repository or all of them.",
+                    Ui.Row(6, new PathIcon { Data = Icons.SourceBranch, Width = 15, Height = 15, Foreground = Ui.Dim }, _branchPicker),
+                    _picker,
+                    Ui.IconButton(Icons.Plus, "Add a repository", () => _ = AddAsync(), "Add"),
+                    _remove,
+                    Ui.IconButton(Icons.Refresh, "Refresh", () => { _branchSignature = ""; _ = RefreshAsync(); })).Dock(Dock.Top),
+                new Panel { Children = { _main, _empty } },
+            },
+        };
+        Repos.Changed += Ui.Debounced(() => _ = RefreshAsync());
+        Watches.Changed += Ui.Debounced(() => { if (_tab == Tab.PullRequests && IsVisible) _ = RefreshAsync(); }, 250);
+        _ = RefreshAsync();
+    }
+
+    public void OnShown() => _ = RefreshAsync();
+
+    public void SelectRepo(string? id)
+    {
+        _repoId = id;
+        ClearSelection();
+        _ = RefreshAsync();
+    }
+
+    /// <summary>Shows a repository, and optionally a commit ("commit:hash") or a file ("file:path") in it. Used by Search.</summary>
+    public void Reveal(string repoId, string? what, int line = 0)
+    {
+        if (Repos.Find(repoId) is not { } repo) return;
+        _repoId = repo.Id;
+        ClearSelection();
+        if (what?.StartsWith("commit:", StringComparison.Ordinal) == true) { _tab = Tab.History; _ = ViewCommitAsync(repo, what[7..]); return; }
+        if (what?.StartsWith("file:", StringComparison.Ordinal) == true) { _tab = Tab.Changes; _file = (repo.Id, what[5..], line); }
+        _ = RefreshAsync();
+    }
+
+    private void ClearSelection()
+    {
+        _change = null; _commit = null; _view = null; _viewFile = null; _branch = null; _pr = null; _file = null; _lastSelected = null;
+    }
+
+    private void Select(object? tag)
+    {
+        _lastSelected = tag;
+        switch (tag)
+        {
+            case ChangeRef c: _change = c; _file = null; break;
+            case CommitRef c: _commit = c; break;
+            case CommitFileRef f: _viewFile = f; break;
+            case BranchRef b: _branch = b; break;
+            case PrRef p: _pr = p; break;
+        }
+    }
+
+    private RepoEntry? CurrentRepo =>
+        Repos.Items.FirstOrDefault(r => r.Id == (_view?.Repo.Id ?? (_tab switch
+        {
+            Tab.Changes => _file?.RepoId ?? _change?.Change.RepoId, Tab.History => _commit?.RepoId, Tab.Branches => _branch?.RepoId, _ => _pr?.RepoId,
+        }) ?? _repoId)) ?? Repos.Items.FirstOrDefault(r => r.Id == _repoId) ?? (Repos.Items.Count == 1 ? Repos.Items[0] : null);
+
+    // ---- look ----
+
+    /// <summary>The glyph in front of a changed file: what happened to it, in a shape and a colour.</summary>
+    private static (Geometry Icon, IBrush Brush) Glyph(string description) => description switch
+    {
+        "untracked" => (Icons.PlusCircle, Ui.Tk("accent")),
+        "added" => (Icons.PlusCircle, Ui.Tk("ok")),
+        "deleted" => (Icons.MinusCircle, Ui.Tk("error")),
+        "conflict" => (Icons.AlertCircle, Ui.Tk("errorHi")),
+        "renamed" or "copied" => (Icons.ArrowRightCircle, Ui.Tk("purple")),
+        "type changed" => (Icons.HelpCircle, Ui.Tk("warn")),
+        _ => (Icons.PencilCircle, Ui.Tk("warn")),
+    };
+
+    private static Control StatusGlyph(string description, string tip)
+    {
+        var (icon, brush) = Glyph(description);
+        var glyph = new PathIcon { Data = icon, Foreground = brush, Width = 14, Height = 14, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Left };
+        ToolTip.SetTip(glyph, tip);
+        return glyph;
+    }
+
+    private static Control FileRow(string path, string description, string tip, string? was = null)
+    {
+        var dir = Path.GetDirectoryName(path.TrimEnd('/'))?.Replace('\\', '/') ?? "";
+        return new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("24,*"),
+            Children =
+            {
+                StatusGlyph(description, tip),
+                Ui.Row(6,
+                    new TextBlock { Text = Path.GetFileName(path.TrimEnd('/')) + (path.EndsWith('/') ? "/" : ""), FontSize = 12.5 },
+                    new TextBlock { Text = dir + (was is null ? "" : $"  (was {was})"), FontSize = 11.5, Foreground = Ui.Dim, VerticalAlignment = VerticalAlignment.Center }).At(0, 1),
+            },
+        };
+    }
+
+    private ListBoxItem HeaderRow(RepoEntry repo, string detail, string? error, ContextMenu? menu)
+    {
+        var content = new Border
+        {
+            Background = Brushes.Transparent, Padding = new Thickness(8, 9, 8, 3),
+            Child = Ui.Column(1,
+                Ui.Row(8, new TextBlock { Text = repo.Name, FontWeight = FontWeight.SemiBold }, new TextBlock { Text = detail, Foreground = Ui.Dim, FontSize = 12, VerticalAlignment = VerticalAlignment.Center }),
+                Ui.Apply(new TextBlock { Text = error ?? "", Foreground = Ui.Tk("error"), FontSize = 12, TextWrapping = TextWrapping.Wrap }, t => t.IsVisible = error is not null)),
+        };
+        ToolTip.SetTip(content, repo.Path + "\nRight-click for branch, folder, remote and more");
+        return new ListBoxItem { Tag = new HeaderRef(repo), Padding = new Thickness(0), Focusable = false, Content = content, ContextMenu = menu ?? RepoMenu(repo) };
+    }
+
+    private static ListBoxItem SubHeader(string text) => new()
+    {
+        IsHitTestVisible = false, Focusable = false, Padding = new Thickness(10, 5, 8, 1), MinHeight = 0,
+        Content = new TextBlock { Text = text.ToUpperInvariant(), FontSize = 10.5, Foreground = Ui.Tk("faint"), FontWeight = FontWeight.SemiBold },
+    };
+
+    private static ListBoxItem Note(string text) => new()
+    {
+        IsHitTestVisible = false, Focusable = false, Padding = new Thickness(12, 4, 8, 6),
+        Content = new TextBlock { Text = text, FontSize = 12, Foreground = Ui.Dim, TextWrapping = TextWrapping.Wrap },
+    };
+
+    // ---- refresh ----
+
+    private async Task RefreshAsync()
+    {
+        // One refresh at a time; a request that arrives meanwhile runs once more afterwards.
+        if (_refreshing) { _refreshAgain = true; return; }
+        _refreshing = true;
+        try
+        {
+            do
+            {
+                _refreshAgain = false;
+                try { await RefreshCoreAsync(); }
+                catch (Exception ex) { Core.Logging.Log.Error("repos", "Refresh failed", ex); }
+            } while (_refreshAgain);
+        }
+        finally { _refreshing = false; }
+    }
+
+    private async Task RefreshCoreAsync()
+    {
+        var gen = ++_generation;
+        var repos = Repos.Items;
+        if (_repoId is not null && repos.All(r => r.Id != _repoId)) { _repoId = null; ClearSelection(); }
+
+        // The repository list is only rebuilt when the set of repositories changed.
+        var signature = string.Join("|", repos.Select(r => r.Id + "=" + r.Name));
+        _building = true;
+        try
+        {
+            if (signature != _repoSignature)
+            {
+                _repoSignature = signature;
+                var choices = new List<RepoChoice> { new(null, $"All repositories ({repos.Count})") };
+                choices.AddRange(repos.Select(r => new RepoChoice(r.Id, r.Name)));
+                _picker.ItemsSource = choices;
+            }
+            var wanted = (_picker.ItemsSource as List<RepoChoice>)?.FirstOrDefault(c => c.Id == _repoId);
+            if (!Equals(_picker.SelectedItem, wanted)) _picker.SelectedItem = wanted;
+        }
+        finally { _building = false; }
+
+        _empty.IsVisible = repos.Count == 0;
+        _main.IsVisible = repos.Count > 0;
+        _picker.IsVisible = repos.Count > 0;
+        _remove.IsEnabled = _repoId is not null;
+        ToolTip.SetTip(_picker, _repoId is null ? "Showing every repository" : Repos.Find(_repoId)?.Path);
+        for (var i = 0; i < _tabs.Length; i++) _tabs[i].Classes.Set("on", i == (int)_tab);
+        _prBar.IsVisible = _tab == Tab.PullRequests && _view is null;
+        _commitButton.IsVisible = _tab == Tab.Changes && _view is null;
+        if (repos.Count == 0) return;
+
+        await RefreshBranchPickerAsync(gen);
+        if (gen != _generation) return;
+
+        var shown = _repoId is null ? repos.ToList() : repos.Where(r => r.Id == _repoId).ToList();
+        var rows = new List<ListBoxItem>();
+        if (_view is not null) BuildCommitView(rows);
+        else switch (_tab)
+        {
+            case Tab.Changes: await BuildChangesAsync(rows, shown); break;
+            case Tab.History: await BuildHistoryAsync(rows, shown); break;
+            case Tab.Branches: await BuildBranchesAsync(rows, shown); break;
+            default: BuildPullRequests(rows, shown); break;
+        }
+        if (gen != _generation) return;
+
+        // Keep showing what was selected if it still exists; otherwise pick the first entry. The row is marked
+        // before it goes into the list: selecting an item that was only just added does not highlight it.
+        var selected = rows.FirstOrDefault(r => r.IsSelected) ?? (_file is null ? rows.FirstOrDefault(r => r.Tag is ChangeRef or CommitRef or CommitFileRef or BranchRef or PrRef) : null);
+        if (selected is not null) selected.IsSelected = true;
+        _building = true;
+        try
+        {
+            _list.Items.Clear();
+            foreach (var r in rows) _list.Items.Add(r);
+            if (selected is null) { if (_view is null) { _change = null; _commit = null; _branch = null; _pr = null; } _lastSelected = null; }
+            else Select(selected.Tag);
+        }
+        finally { _building = false; }
+        await ShowAsync();
+    }
+
+    /// <summary>The branch switcher follows the repository being shown; with all repositories it is greyed out.</summary>
+    private async Task RefreshBranchPickerAsync(int gen)
+    {
+        var repo = _repoId is null ? null : Repos.Find(_repoId);
+        _branchPicker.IsEnabled = repo is not null;
+        ToolTip.SetTip(_branchPicker, repo is null ? "Choose one repository to switch its branch" : $"Switch the branch of {repo.Name}");
+        if (repo is null)
+        {
+            _building = true;
+            try { _branchPicker.ItemsSource = null; _branchSignature = ""; _branchPicker.PlaceholderText = "All repositories"; }
+            finally { _building = false; }
+            return;
+        }
+        var branches = await Repos.BranchesAsync(repo);
+        if (gen != _generation) return;
+        var signature = repo.Id + ":" + string.Join("|", branches.Select(b => (b.IsCurrent ? "*" : "") + b.Name));
+        if (signature == _branchSignature) return;
+        _branchSignature = signature;
+        var local = branches.Where(b => !b.IsRemote).Select(b => b.Name).ToHashSet();
+        var choices = branches.Where(b => !b.IsRemote).Select(b => new BranchChoice(b, b.Name)).ToList();
+        // Remote branches that have no local branch yet can be switched to as well.
+        choices.AddRange(branches.Where(b => b.IsRemote && !local.Contains(b.Name[(b.Name.IndexOf('/') + 1)..])).Select(b => new BranchChoice(b, b.Name)));
+        _building = true;
+        try
+        {
+            _branchPicker.ItemsSource = choices;
+            _branchPicker.SelectedItem = choices.FirstOrDefault(c => c.Branch!.IsCurrent);
+            _branchPicker.PlaceholderText = choices.Count == 0 ? "No branches yet" : "Detached HEAD";
+        }
+        finally { _building = false; }
+    }
+
+    private async Task BuildChangesAsync(List<ListBoxItem> rows, List<RepoEntry> shown)
+    {
+        var statuses = await Task.WhenAll(shown.Select(Repos.StatusAsync));
+        foreach (var st in statuses)
+        {
+            var repo = shown.First(r => r.Id == st.Id);
+            var branch = st.Error is not null ? "error" : (st.Branch ?? "?") + (st.Ahead > 0 ? $" ↑{st.Ahead}" : "") + (st.Behind > 0 ? $" ↓{st.Behind}" : "");
+            rows.Add(HeaderRow(repo, branch + (st.Error is null ? st.Changes.Count == 0 ? " · clean" : $" · {st.Changes.Count} changed" : ""), st.Error, null));
+            var staged = st.Changes.Where(c => c.Staged).ToList();
+            var unstaged = st.Changes.Where(c => c.Unstaged || c.Untracked).ToList();
+            if (staged.Count > 0) rows.Add(SubHeader($"Staged ({staged.Count})"));
+            foreach (var c in staged) rows.Add(ChangeRow(repo, c, true));
+            if (unstaged.Count > 0) rows.Add(SubHeader($"Changes ({unstaged.Count})"));
+            foreach (var c in unstaged) rows.Add(ChangeRow(repo, c, false));
+        }
+    }
+
+    /// <summary>What happened to a file on one side: in the index (staged) or in the working tree.</summary>
+    private static string Describe(RepoChange c, bool staged)
+    {
+        if (c.Description == "conflict") return "conflict";
+        if (c.Untracked) return "untracked";
+        return (staged ? c.Index : c.WorkTree) switch { 'A' => "added", 'D' => "deleted", 'R' => "renamed", 'C' => "copied", 'T' => "type changed", _ => "modified" };
+    }
+
+    private ListBoxItem ChangeRow(RepoEntry repo, RepoChange c, bool staged)
+    {
+        var what = Describe(c, staged);
+        var tip = what switch
+        {
+            "untracked" => "New file that git is not tracking yet", "conflict" => "Merge conflict: resolve it, then stage the file",
+            _ => char.ToUpperInvariant(what[0]) + what[1..] + (staged ? ", staged for the next commit" : ", not staged"),
+        };
+        var reference = new ChangeRef(c, staged);
+        var item = new ListBoxItem
+        {
+            Tag = reference, Padding = new Thickness(12, 4, 8, 4),
+            IsSelected = _change is not null && _change.Staged == staged && _change.Change.RepoId == c.RepoId && _change.Change.Path == c.Path,
+            Content = FileRow(c.Path, what, tip, staged ? c.OriginalPath : null),
+        };
+        var full = Path.Combine(repo.Path, c.Path);
+        var menu = new ContextMenu();
+        if (staged) menu.Items.Add(Ui.Item("Unstage", () => Repos.UnstageAsync(repo, c.Path)));
+        else menu.Items.Add(Ui.Item("Stage", () => Repos.StageAsync(repo, c.Path)));
+        if (!staged) menu.Items.Add(Ui.Item(c.Untracked ? "Delete File…" : "Discard Changes…", () => DiscardAsync(repo, c)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Ui.Item("Open in Editor", () => Ui.OpenInEditor(c.Path, repo.Path), what != "deleted" && !c.Path.EndsWith('/'), Icons.Pencil));
+        menu.Items.Add(Ui.Item("Open in Default App", () => Shell.Open(full), File.Exists(full)));
+        menu.Items.Add(Ui.Item("Show in Folder", () => Shell.ShowInFolder(File.Exists(full) || Directory.Exists(full) ? full : Path.GetDirectoryName(full) ?? repo.Path)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Ui.Item("Copy Path", () => { _ = App.Services.Host.SetClipboardAsync(full); }));
+        menu.Items.Add(Ui.Item("Copy Relative Path", () => { _ = App.Services.Host.SetClipboardAsync(c.Path); }));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Ui.Item($"Stage All in {repo.Name}", () => Repos.StageAllAsync(repo)));
+        menu.Items.Add(Ui.Item($"Unstage All in {repo.Name}", () => Repos.UnstageAllAsync(repo)));
+        item.ContextMenu = menu;
+        return item;
+    }
+
+    private async Task BuildHistoryAsync(List<ListBoxItem> rows, List<RepoEntry> shown)
+    {
+        foreach (var repo in shown)
+        {
+            var commits = await Repos.LogAsync(repo, _repoId is null ? 15 : null);
+            rows.Add(HeaderRow(repo, commits.Count == 0 ? "no commits" : $"{commits.Count} recent commit(s)", null, null));
+            foreach (var c in commits)
+            {
+                rows.Add(new ListBoxItem
+                {
+                    Tag = new CommitRef(repo.Id, c), IsSelected = _commit is not null && _commit.RepoId == repo.Id && _commit.Commit.Hash == c.Hash, Padding = new Thickness(12, 5, 8, 5),
+                    Content = Ui.Column(1,
+                        new TextBlock { Text = c.Subject, FontSize = 12.5, TextTrimming = TextTrimming.CharacterEllipsis },
+                        Ui.Text($"{c.Hash} · {c.Author} · {c.Date}", "dim", 11)),
+                    ContextMenu = CommitMenu(repo, c),
+                });
+            }
+        }
+    }
+
+    private void BuildCommitView(List<ListBoxItem> rows)
+    {
+        var view = _view!;
+        var back = new ListBoxItem
+        {
+            Padding = new Thickness(6, 4), Focusable = false, Tag = new HeaderRef(view.Repo),
+            Content = Ui.IconButton(Icons.ArrowLeft, "Back to the list", () => { _view = null; _viewFile = null; _ = RefreshAsync(); }, _tab == Tab.Branches ? "Back to branches" : "Back to history"),
+            ContextMenu = new ContextMenu { Items = { Ui.Item("Back", () => { _view = null; _viewFile = null; _ = RefreshAsync(); }) } },
+        };
+        rows.Add(back);
+        rows.Add(Note($"{view.Repo.Name} · commit {view.Info.ShortHash}\n{view.Info.Subject}\n{view.Info.Author} · {view.Info.Date}"));
+        rows.Add(SubHeader($"Files in this commit ({view.Files.Count})"));
+        foreach (var f in view.Files)
+        {
+            var reference = new CommitFileRef(view.Repo.Id, view.Info.Hash, f);
+            var full = Path.Combine(view.Repo.Path, f.Path);
+            rows.Add(new ListBoxItem
+            {
+                Tag = reference, Padding = new Thickness(12, 4, 8, 4), IsSelected = _viewFile?.File.Path == f.Path,
+                Content = FileRow(f.Path, f.Description, char.ToUpperInvariant(f.Description[0]) + f.Description[1..] + " in this commit", f.OriginalPath),
+                ContextMenu = new ContextMenu
+                {
+                    Items =
+                    {
+                        Ui.Item("Open Current Version in Editor", () => Ui.OpenInEditor(f.Path, view.Repo.Path), File.Exists(full), Icons.Pencil),
+                        Ui.Item("Show in Folder", () => Shell.ShowInFolder(full), File.Exists(full)),
+                        Ui.Item("Copy Path", () => { _ = App.Services.Host.SetClipboardAsync(full); }),
+                    },
+                },
+            });
+        }
+        if (view.Files.Count == 0) rows.Add(Note("This commit changed no files (a merge, perhaps)."));
+    }
+
+    private async Task BuildBranchesAsync(List<ListBoxItem> rows, List<RepoEntry> shown)
+    {
+        foreach (var repo in shown)
+        {
+            var branches = await Repos.BranchesAsync(repo);
+            rows.Add(HeaderRow(repo, $"{branches.Count(b => !b.IsRemote)} local · {branches.Count(b => b.IsRemote)} remote", null, null));
+            foreach (var group in branches.GroupBy(b => b.IsRemote))
+            {
+                rows.Add(SubHeader(group.Key ? "Remote" : "Local"));
+                foreach (var b in group)
+                {
+                    var name = new TextBlock { Text = b.Name, FontSize = 12.5, FontWeight = b.IsCurrent ? FontWeight.SemiBold : FontWeight.Normal, TextTrimming = TextTrimming.CharacterEllipsis };
+                    var line = Ui.Row(6, new PathIcon { Data = b.IsCurrent ? Icons.CheckCircle : Icons.SourceBranch, Width = 13, Height = 13, Foreground = b.IsCurrent ? Ui.Tk("ok") : Ui.Dim }, name);
+                    if (b.Track.Length > 0) line.Children.Add(new TextBlock { Text = b.Track, FontSize = 11, Foreground = Ui.Tk("warn"), VerticalAlignment = VerticalAlignment.Center });
+                    var item = new ListBoxItem
+                    {
+                        Tag = new BranchRef(repo.Id, b), Padding = new Thickness(12, 4, 8, 4), IsSelected = _branch is not null && _branch.RepoId == repo.Id && _branch.Branch.Name == b.Name,
+                        Content = Ui.Column(1, line, Ui.Text($"{b.Date} · {b.Subject}", "dim", 11)),
+                    };
+                    ToolTip.SetTip(item, b.IsCurrent ? "The branch you are on" : b.Upstream is null ? b.Name : $"{b.Name} tracks {b.Upstream}");
+                    var menu = new ContextMenu();
+                    menu.Items.Add(Ui.Item(b.IsRemote ? "Switch to a Local Copy" : "Switch to This Branch", () => SwitchAsync(repo, b), !b.IsCurrent, Icons.SourceBranch));
+                    menu.Items.Add(Ui.Item("New Branch from Here…", () => NewBranchAsync(repo, b.Name)));
+                    menu.Items.Add(Ui.Item("Merge into Current Branch…", async () =>
+                    {
+                        if (await Ui.ConfirmAsync(Ui.Owner(this), "Merge", $"Merge {b.Name} into the current branch of {repo.Name}?", "Merge")) await Repos.MergeAsync(repo, b.Name);
+                    }, !b.IsCurrent));
+                    menu.Items.Add(new Separator());
+                    menu.Items.Add(Ui.Item("Copy Name", () => { _ = App.Services.Host.SetClipboardAsync(b.Name); }));
+                    if (!b.IsRemote)
+                        menu.Items.Add(Ui.Item("Delete Branch…", async () =>
+                        {
+                            if (!await Ui.ConfirmAsync(Ui.Owner(this), "Delete branch", $"Delete the local branch {b.Name} of {repo.Name}? Git refuses if it has work that is not merged.")) return;
+                            await Repos.DeleteBranchAsync(repo, b.Name);
+                        }, !b.IsCurrent));
+                    item.ContextMenu = menu;
+                    rows.Add(item);
+                }
+            }
+        }
+    }
+
+    // ---- pull requests: a projection of the watch for the repository ----
+
+    private void BuildPullRequests(List<ListBoxItem> rows, List<RepoEntry> shown)
+    {
+        _building = true;
+        try { _mine.IsChecked = State.Data.PullRequestsMineOnly; _active.IsChecked = State.Data.PullRequestsActiveOnly; }
+        finally { _building = false; }
+        foreach (var repo in shown)
+        {
+            var watch = Watches.FindRepoPullRequests(repo.Path);
+            var menu = RepoMenu(repo);
+            if (watch is null)
+            {
+                rows.Add(HeaderRow(repo, "not set up", null, menu));
+                rows.Add(new ListBoxItem
+                {
+                    Focusable = false, Padding = new Thickness(12, 2, 8, 10), Tag = new HeaderRef(repo),
+                    Content = Ui.Column(6,
+                        Ui.Text("Pull requests come from a watch, so they refresh on a schedule and notify you when something changes.", "dim", 12),
+                        Ui.Apply(Ui.TextButton("Set up pull requests…", () => _ = SetupPullRequestsAsync(repo, null)), b => b.HorizontalAlignment = HorizontalAlignment.Left)),
+                });
+                continue;
+            }
+            var all = watch.LastResult?.Items ?? [];
+            var items = all.Where(i => (!State.Data.PullRequestsActiveOnly || i.Active != false) && (!State.Data.PullRequestsMineOnly || i.Mine == true)).ToList();
+            var detail = watch.LastError is not null ? "error" : watch.LastChecked is null ? "checking…" : $"{items.Count} of {all.Count} · checked {Ui.Ago(watch.LastChecked)}";
+            menu.Items.Insert(0, new Separator());
+            menu.Items.Insert(0, Ui.Item("Show in Watching", () => { Ui.Main?.Navigate("watching"); Ui.Main?.Page<WatchingPage>("watching")?.Select(watch.Id); }, icon: Icons.Eye));
+            menu.Items.Insert(0, Ui.Item("Configure Pull Requests…", () => SetupPullRequestsAsync(repo, watch), icon: Icons.Cog));
+            menu.Items.Insert(0, Ui.Item("Check Now", () => Watches.CheckAsync(watch), icon: Icons.Refresh));
+            rows.Add(HeaderRow(repo, detail, watch.LastError, menu));
+            if (watch.LastError is null && items.Count == 0)
+                rows.Add(Note(all.Count == 0 ? (watch.LastChecked is null ? "Checking…" : "No pull requests.") : "No pull requests match the filters above."));
+            foreach (var pr in items)
+            {
+                var reference = new PrRef(repo.Id, watch, pr);
+                var status = (pr.Status ?? "open").ToLowerInvariant();
+                var chip = Ui.Chip(status, Ui.Tk(status switch
+                {
+                    "merged" or "completed" => "purple", "closed" or "abandoned" or "declined" => "error", "draft" => "faint",
+                    "approved" => "ok", "changes requested" => "warn", _ => "accent",
+                }));
+                var item = new ListBoxItem
+                {
+                    Tag = reference, Padding = new Thickness(12, 5, 8, 5), IsSelected = _pr is not null && _pr.RepoId == repo.Id && _pr.Item.Id == pr.Id && _pr.Item.Title == pr.Title,
+                    Opacity = pr.Active == false ? 0.65 : 1,
+                    Content = Ui.Column(2,
+                        new DockPanel { Children = { Ui.Apply(chip, c => c.Margin = new Thickness(8, 0, 0, 0)).Dock(Dock.Right), new TextBlock { Text = pr.Title, FontSize = 12.5, TextTrimming = TextTrimming.CharacterEllipsis } } },
+                        Ui.Text((pr.Mine == true ? "mine · " : "") + (pr.Detail ?? pr.Author ?? ""), "dim", 11)),
+                };
+                item.DoubleTapped += (_, _) => { if (pr.Link is { Length: > 0 } l) Shell.Open(l); };
+                item.ContextMenu = new ContextMenu
+                {
+                    Items =
+                    {
+                        Ui.Item("Open in Browser", () => Shell.Open(pr.Link!), pr.Link is { Length: > 0 }, Icons.OpenInNew),
+                        Ui.Item("Copy Link", () => { _ = App.Services.Host.SetClipboardAsync(pr.Link ?? ""); }, pr.Link is { Length: > 0 }),
+                        Ui.Item("Copy Title", () => { _ = App.Services.Host.SetClipboardAsync(pr.Title); }),
+                    },
+                };
+                rows.Add(item);
+            }
+        }
+    }
+
+    private async Task CheckPullRequestsAsync()
+    {
+        var repos = _repoId is null ? Repos.Items : Repos.Items.Where(r => r.Id == _repoId).ToList();
+        var watches = repos.Select(r => Watches.FindRepoPullRequests(r.Path)).Where(w => w is not null).ToList();
+        if (watches.Count == 0) { Ui.Toast(this, "Nothing to check", "Set up pull requests for a repository first."); return; }
+        await Ui.TryAsync(this, () => Task.WhenAll(watches.Select(w => Watches.CheckAsync(w!))));
+    }
+
+    /// <summary>Creates or edits the watch behind a repository's pull request list.</summary>
+    private async Task SetupPullRequestsAsync(RepoEntry repo, WatchItem? existing)
+    {
+        var fallback = App.Services.Config.Settings.Repositories.PullRequestCommand;
+        var command = new TextBox
+        {
+            Text = existing?.Settings.GetValueOrDefault("command") ?? "", Classes = { "mono" }, AcceptsReturn = false, TextWrapping = TextWrapping.Wrap,
+            PlaceholderText = fallback.Length > 0 ? fallback : "gh pr list --state all --json number,title,state,isDraft,author,url,headRefName,baseRefName,updatedAt,reviewDecision",
+        };
+        var me = new TextBox { Text = existing?.Settings.GetValueOrDefault("me") ?? "", PlaceholderText = "Asked from the GitHub CLI when empty" };
+        var interval = new TextBox { Text = existing?.IntervalMinutes?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "", Width = 140, HorizontalAlignment = HorizontalAlignment.Left, PlaceholderText = $"default ({App.Services.Config.Settings.Watching.DefaultIntervalMinutes:0.##})" };
+        var body = Ui.Column(12,
+            Ui.Text($"Pull requests of {repo.Name} are kept by a watch named \"{existing?.Name ?? repo.Name + " pull requests"}\". It also appears on the Watching page, where it can be disabled or removed.", "dim", 12.5),
+            Ui.Field("Command", command, "Runs in the repository folder and prints a JSON array of pull requests (number, title, state, isDraft, author, url, headRefName, baseRefName, updatedAt; mine and active are optional), " +
+                                          "or the usual watch result object. Leave empty to use the GitHub CLI."),
+            Ui.Field("Your user name", me, "Used to tell which pull requests are yours when the command does not say."),
+            Ui.Field("Minutes between checks", interval, "Empty uses the default from Settings → Watching."));
+        WatchItem? saved = null;
+        var ok = await Ui.FormAsync(Ui.Owner(this), existing is null ? "Set up pull requests" : "Configure pull requests", body, () =>
+        {
+            double? minutes = null;
+            if (!string.IsNullOrWhiteSpace(interval.Text))
+            {
+                if (!double.TryParse(interval.Text.Trim(), System.Globalization.CultureInfo.InvariantCulture, out var parsed) || parsed <= 0) return Task.FromResult<string?>("Minutes between checks must be a positive number.");
+                minutes = parsed;
+            }
+            var watch = existing ?? Watches.EnsureRepoPullRequests(repo.Name, repo.Path);
+            void Set(string key, string? value) { if (string.IsNullOrWhiteSpace(value)) watch.Settings.Remove(key); else watch.Settings[key] = value.Trim(); }
+            Set("command", command.Text);
+            Set("me", me.Text);
+            watch.IntervalMinutes = minutes;
+            Watches.Save();
+            saved = watch;
+            return Task.FromResult<string?>(null);
+        }, existing is null ? "Set up" : "Save", 600);
+        if (!ok || saved is null) return;
+        _ = Watches.CheckAsync(saved);
+        await RefreshAsync();
+    }
+
+    // ---- menus ----
+
+    private ContextMenu RepoMenu(RepoEntry repo)
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(Ui.Item("Change Branch…", () => ChangeBranchAsync(repo), icon: Icons.SourceBranch));
+        menu.Items.Add(Ui.Item("Open Folder", () => Shell.Open(repo.Path), icon: Icons.FolderOpen));
+        menu.Items.Add(Ui.Item("Open Remote", async () =>
+        {
+            var url = RepoService.ToWebUrl(await Repos.RemoteUrlAsync(repo));
+            if (url is null) Ui.Toast(this, "No remote", $"{repo.Name} has no remote to open."); else Shell.Open(url);
+        }, icon: Icons.OpenInNew));
+        menu.Items.Add(Ui.Item("Open Terminal Here", () => OpenTerminalIn(repo), icon: Icons.Console));
+        menu.Items.Add(Ui.Item("Open in Editor", () => Ui.OpenInEditor(repo.Path), icon: Icons.Pencil));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Ui.Item("Fetch", () => Network(repo, "Fetched", Repos.FetchAsync)));
+        menu.Items.Add(Ui.Item("Pull", () => Network(repo, "Pulled", Repos.PullAsync)));
+        menu.Items.Add(Ui.Item("Push", () => Network(repo, "Pushed", Repos.PushAsync)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Ui.Item("Stage All", () => Repos.StageAllAsync(repo)));
+        menu.Items.Add(Ui.Item("Unstage All", () => Repos.UnstageAllAsync(repo)));
+        menu.Items.Add(Ui.Item("Commit…", () => CommitAsync(repo), icon: Icons.Check));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Ui.Item("Show Only This Repository", () => SelectRepo(repo.Id), _repoId != repo.Id));
+        menu.Items.Add(Ui.Item("Copy Path", () => { _ = App.Services.Host.SetClipboardAsync(repo.Path); }));
+        return menu;
+    }
+
+    private async Task Network(RepoEntry repo, string done, Func<RepoEntry, Task> action)
+    {
+        Ui.Toast(this, "Talking to the remote…", repo.Name);
+        await action(repo);
+        Ui.Toast(this, done, repo.Name);
+        _branchSignature = "";
+    }
+
+    private ContextMenu CommitMenu(RepoEntry repo, RepoCommit c)
+    {
+        async Task Guarded(string title, string question, string action, Func<Task> work)
+        {
+            if (!await Ui.ConfirmAsync(Ui.Owner(this), title, question, action)) return;
+            await work();
+            Ui.Toast(this, title, $"{repo.Name} · {c.Hash}");
+        }
+        var reset = new MenuItem { Header = "Reset Current Branch to Here" };
+        reset.Items.Add(Ui.Item("Soft: keep changes staged…", () => Guarded("Reset (soft)", $"Move the current branch of {repo.Name} to {c.Hash}? The commits after it are undone; their changes stay staged.", "Reset", () => Repos.ResetAsync(repo, c.Hash, "soft"))));
+        reset.Items.Add(Ui.Item("Mixed: keep changes unstaged…", () => Guarded("Reset (mixed)", $"Move the current branch of {repo.Name} to {c.Hash}? The commits after it are undone; their changes stay in your files.", "Reset", () => Repos.ResetAsync(repo, c.Hash, "mixed"))));
+        reset.Items.Add(Ui.Item("Hard: discard changes…", () => Guarded("Reset (hard)", $"Move the current branch of {repo.Name} to {c.Hash} and THROW AWAY every change after it, including uncommitted work? This cannot be undone from here.", "Discard and reset", () => Repos.ResetAsync(repo, c.Hash, "hard"))));
+        var menu = new ContextMenu();
+        menu.Items.Add(Ui.Item("View Commit", () => ViewCommitAsync(repo, c.Hash), icon: Icons.Eye));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Ui.Item("Copy Hash", async () => { var info = await Repos.CommitInfoAsync(repo, c.Hash); await App.Services.Host.SetClipboardAsync(info?.Hash ?? c.Hash); }, icon: Icons.ContentCopy));
+        menu.Items.Add(Ui.Item("Copy Message", async () => { var info = await Repos.CommitInfoAsync(repo, c.Hash); await App.Services.Host.SetClipboardAsync(info is null ? c.Subject : (info.Subject + "\n\n" + info.Body).Trim()); }));
+        menu.Items.Add(Ui.Item("Open on Remote", async () =>
+        {
+            var url = RepoService.ToWebUrl(await Repos.RemoteUrlAsync(repo));
+            var info = await Repos.CommitInfoAsync(repo, c.Hash);
+            if (url is null) Ui.Toast(this, "No remote", $"{repo.Name} has no remote to open."); else Shell.Open($"{url}/commit/{info?.Hash ?? c.Hash}");
+        }, icon: Icons.OpenInNew));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Ui.Item("New Branch Here…", () => NewBranchAsync(repo, c.Hash), icon: Icons.SourceBranch));
+        menu.Items.Add(Ui.Item("New Tag Here…", async () =>
+        {
+            var name = await Ui.PromptAsync(Ui.Owner(this), "New tag", $"Tag name for {c.Hash}");
+            if (!string.IsNullOrWhiteSpace(name)) { await Repos.TagAsync(repo, name.Trim(), c.Hash); Ui.Toast(this, "Tag created", name.Trim()); }
+        }));
+        menu.Items.Add(Ui.Item("Check Out This Commit…", () => Guarded("Check out", $"Check out {c.Hash} in {repo.Name}? You will be on a detached HEAD: switch to a branch afterwards to keep working.", "Check out", () => Repos.CheckoutCommitAsync(repo, c.Hash))));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Ui.Item("Cherry-pick onto Current Branch…", () => Guarded("Cherry-pick", $"Apply the changes of {c.Hash} (\"{c.Subject}\") as a new commit on the current branch of {repo.Name}?", "Cherry-pick", () => Repos.CherryPickAsync(repo, c.Hash))));
+        menu.Items.Add(Ui.Item("Revert This Commit…", () => Guarded("Revert", $"Create a new commit in {repo.Name} that undoes {c.Hash} (\"{c.Subject}\")?", "Revert", () => Repos.RevertAsync(repo, c.Hash))));
+        menu.Items.Add(reset);
+        return menu;
+    }
+
+    // ---- right-hand pane ----
+
+    private void SetButtons(bool stage = false, bool edit = false, bool modes = false, bool open = false)
+    {
+        _stage.IsVisible = stage; _edit.IsVisible = edit; _open.IsVisible = open;
+        _diffMode.IsVisible = _fileModeButton.IsVisible = modes;
+        _diffMode.Opacity = _fileMode ? 0.55 : 1;
+        _fileModeButton.Opacity = _fileMode ? 1 : 0.55;
+    }
+
+    private void SetTitle(string title, string? sub = null)
+    {
+        _diffTitle.Text = title;
+        _diffSub.Text = sub ?? "";
+        _diffSub.IsVisible = !string.IsNullOrEmpty(sub);
+        ToolTip.SetTip(_diffTitle, sub is null ? title : title + "\n" + sub);
+    }
+
+    private async Task ShowAsync()
+    {
+        var gen = _generation;
+        _doc = null; _docRepo = null; _openLink = null;
+        List<Row> rows;
+        var text = "";
+        if (_view is { } view)
+        {
+            var body = view.Info.Body.Length > 0 ? view.Info.Body.ReplaceLineEndings(" ") : null;
+            SetTitle($"{view.Info.ShortHash}  {view.Info.Subject}", $"{view.Repo.Name} · {view.Info.Author} · {view.Info.Date}" + (body is null ? "" : " · " + body));
+            ToolTip.SetTip(_diffTitle, $"{view.Info.Hash}\n{view.Info.Subject}\n\n{view.Info.Body}".TrimEnd());
+            SetButtons(modes: false);
+            if (_viewFile is { } vf) { text = await Repos.CommitFileDiffAsync(view.Repo, vf.Hash, vf.File.Path); rows = DiffRows(DiffDoc.Parse(text)); }
+            else rows = [new Row(RowKind.Info, "Select a file of this commit.")];
+        }
+        else if (_tab == Tab.Changes && _file is { } f && Repos.Find(f.RepoId) is { } fileRepo)
+        {
+            SetTitle((_repoId is null ? fileRepo.Name + " · " : "") + f.Path, "File");
+            SetButtons(edit: true);
+            text = await Repos.FileTextAsync(fileRepo, f.Path);
+            rows = FileRows(text, f.Path, null);
+        }
+        else if (_tab == Tab.Changes && _change is { } c && Repos.Find(c.Change.RepoId) is { } repo)
+        {
+            var change = c.Change;
+            SetTitle((_repoId is null ? repo.Name + " · " : "") + change.Path + (change.OriginalPath is { } o ? $"  (was {o})" : ""), c.Staged ? "Staged" : change.Untracked ? "Untracked" : "Not staged");
+            _stage.Content = c.Staged ? "Unstage" : "Stage";
+            SetButtons(stage: true, edit: !change.Path.EndsWith('/') && Describe(change, c.Staged) != "deleted", modes: true);
+            var diff = await Repos.DiffAsync(repo, change.Path, staged: c.Staged, untracked: change.Untracked);
+            var doc = DiffDoc.Parse(diff);
+            if (_fileMode)
+            {
+                text = await Repos.FileTextAsync(repo, change.Path, c.Staged ? ":" : null);
+                var changed = doc.Lines.Where(l => l.Kind == DiffKind.Add && l.New is not null).Select(l => l.New!.Value).ToHashSet();
+                rows = FileRows(text, change.Path, changed);
+            }
+            else
+            {
+                text = diff;
+                rows = DiffRows(doc);
+                // Hunks and lines can be staged from a tracked file's own diff.
+                if (!change.Untracked && change.Description != "conflict" && doc.Files.Count == 1) { _doc = doc; _docRepo = repo; _docStaged = c.Staged; }
+            }
+        }
+        else if (_tab == Tab.History && _commit is { } k && Repos.Find(k.RepoId) is { } repo2)
+        {
+            SetTitle($"{k.Commit.Hash}  {k.Commit.Subject}", $"{repo2.Name} · {k.Commit.Author} · {k.Commit.Date} · right-click the commit for more");
+            SetButtons();
+            text = await Repos.ShowAsync(repo2, k.Commit.Hash);
+            rows = DiffRows(DiffDoc.Parse(text));
+        }
+        else if (_tab == Tab.Branches && _branch is { } b && Repos.Find(b.RepoId) is { } repo3)
+        {
+            SetTitle($"{b.Branch.Name}", $"{repo3.Name} · commits on this branch · double-click one to see its files");
+            SetButtons();
+            var commits = await Repos.LogAsync(repo3, null, b.Branch.Name);
+            rows = commits.Select(x => new Row(RowKind.Log, x.Subject, Commit: x)).ToList();
+            text = string.Join('\n', commits.Select(x => $"{x.Hash} {x.Date} {x.Author}: {x.Subject}"));
+            if (rows.Count == 0) rows.Add(new Row(RowKind.Info, "No commits."));
+        }
+        else if (_tab == Tab.PullRequests && _pr is { } pr)
+        {
+            SetTitle(pr.Item.Title, $"{Repos.Find(pr.RepoId)?.Name} · {pr.Item.Status}");
+            _openLink = pr.Item.Link;
+            SetButtons(open: pr.Item.Link is { Length: > 0 });
+            var lines = new List<string> { pr.Item.Title, "" };
+            void Add(string label, string? value) { if (!string.IsNullOrWhiteSpace(value)) lines.Add($"{label,-10}{value}"); }
+            Add("Status", pr.Item.Status); Add("Author", pr.Item.Author + (pr.Item.Mine == true ? " (you)" : "")); Add("Details", pr.Item.Detail); Add("Link", pr.Item.Link);
+            lines.Add("");
+            lines.Add($"From the watch \"{pr.Watch.Name}\", checked {Ui.Ago(pr.Watch.LastChecked)}.");
+            text = string.Join('\n', lines);
+            rows = lines.Select(l => new Row(RowKind.Info, l)).ToList();
+        }
+        else
+        {
+            SetTitle(_tab switch { Tab.History => "Select a commit", Tab.Branches => "Select a branch", Tab.PullRequests => "Select a pull request", _ => "Nothing changed" });
+            SetButtons();
+            rows = [];
+        }
+        if (gen != _generation) return;
+        _diffText = text;
+        const int max = 20000;
+        if (rows.Count > max) { var more = rows.Count - max; rows = rows.Take(max).ToList(); rows.Add(new Row(RowKind.Info, $"… {more} more lines not shown …")); }
+        _diff.ItemsSource = rows;
+        if (_file is { Line: > 0 } target && rows.Count >= target.Line) Dispatcher.UIThread.Post(() => { _diff.SelectedIndex = target.Line - 1; _diff.ScrollIntoView(target.Line - 1); }, DispatcherPriority.Background);
+    }
+
+    private static List<Row> DiffRows(DiffDoc doc) => doc.Lines.Select(l => new Row(l.Kind switch
+    {
+        DiffKind.Meta => RowKind.Meta, DiffKind.FileHeader => RowKind.FileHeader, DiffKind.Hunk => RowKind.Hunk, DiffKind.Add => RowKind.Add,
+        DiffKind.Del => RowKind.Del, DiffKind.NoNewline => RowKind.Note, _ => RowKind.Context,
+    }, l.Text, l.Old, l.New, l)).ToList();
+
+    /// <summary>A whole file, highlighted for its language. Lines in <paramref name="changed"/> get a mark in the margin.</summary>
+    private static List<Row> FileRows(string text, string path, HashSet<int>? changed)
+    {
+        var lines = Syntax.Highlight(text.Replace("\r\n", "\n").TrimEnd('\n'), Syntax.LanguageOf(path));
+        var rows = new List<Row>(lines.Count);
+        for (var i = 0; i < lines.Count; i++) rows.Add(new Row(RowKind.Code, "", null, i + 1, null, lines[i], changed?.Contains(i + 1) == true));
+        return rows;
+    }
+
+    private static Control BuildRow(Row r)
+    {
+        if (r.Kind == RowKind.Log && r.Commit is { } c)
+        {
+            return new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 12, Margin = new Thickness(12, 3),
+                Children =
+                {
+                    new TextBlock { Text = c.Hash, FontFamily = Ui.Mono, FontSize = 12.5, Foreground = Ui.Tk("warn"), Width = 74 },
+                    new TextBlock { Text = c.Date, FontFamily = Ui.Mono, FontSize = 12, Foreground = Ui.Dim, Width = 122 },
+                    new TextBlock { Text = c.Author, FontSize = 12.5, Foreground = Ui.Tk("textMute"), Width = 150, TextTrimming = TextTrimming.CharacterEllipsis },
+                    new TextBlock { Text = c.Subject, FontSize = 12.5 },
+                },
+            };
+        }
+        var numbered = r.Kind is RowKind.Context or RowKind.Add or RowKind.Del or RowKind.Hunk or RowKind.Note or RowKind.Code;
+        var (fg, bg, bar) = r.Kind switch
+        {
+            RowKind.Add => (Ui.Tk("okHi"), Ui.Tk("addBg"), Ui.Tk("ok")),
+            RowKind.Del => (Ui.Tk("errorText"), Ui.Tk("delBg"), Ui.Tk("error")),
+            RowKind.Hunk => (Ui.Tk("link"), Ui.Tk("hunkBg"), Ui.Tk("accent")),
+            RowKind.FileHeader or RowKind.Note => (Ui.Tk("dim"), (IBrush)Brushes.Transparent, (IBrush)Brushes.Transparent),
+            RowKind.Meta => (r.Text.StartsWith("commit ", StringComparison.Ordinal) ? Ui.Tk("warn") : Ui.Tk("textCode"), Brushes.Transparent, Brushes.Transparent),
+            RowKind.Code => (Ui.Tk("textCode"), r.Marked ? Ui.Tk("addBg") : Brushes.Transparent, r.Marked ? Ui.Tk("ok") : Brushes.Transparent),
+            _ => (Ui.Tk("textCode"), Brushes.Transparent, Brushes.Transparent),
+        };
+        var text = new TextBlock { FontFamily = Ui.Mono, FontSize = 12.5, Foreground = fg, Padding = new Thickness(10, 0, 12, 0), Tag = "text" };
+        if (r.Spans is not null) { MarkdownView.Fill(text.Inlines!, r.Spans); if (r.Spans.Count == 0) text.Text = " "; }
+        else text.Text = (r.Kind switch { RowKind.Add => "+", RowKind.Del => "-", RowKind.Context => " ", _ => "" }) + (r.Text.Length > 0 || r.Kind is RowKind.Add or RowKind.Del or RowKind.Context ? r.Text : " ");
+        if (!numbered) return new Border { Background = bg, Child = text };
+
+        TextBlock Number(int? n) => new()
+        {
+            Text = n?.ToString() ?? "", Width = 46, TextAlignment = TextAlignment.Right, FontFamily = Ui.Mono, FontSize = 12, Foreground = Ui.Tk("ghost"),
+            Padding = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center, Tag = "number", Background = Brushes.Transparent,
+        };
+        // The coloured strip on the left is the hunk's handle; the numbers are each line's.
+        var strip = new Border { Width = 10, Background = bar, Tag = "strip" };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions(r.Kind == RowKind.Code ? "10,0,Auto,*" : "10,Auto,Auto,*"), Background = bg };
+        grid.Children.Add(strip);
+        if (r.Kind != RowKind.Code) grid.Children.Add(Number(r.Old).At(0, 1));
+        grid.Children.Add(Number(r.New).At(0, 2));
+        grid.Children.Add(text.At(0, 3));
+        return grid;
+    }
+
+    /// <summary>
+    /// Right-click in the diff. On the coloured strip it offers the hunk; on a line number, that one line; on the
+    /// text, both. Staged diffs offer unstaging, unstaged ones staging and discarding.
+    /// </summary>
+    private void OnDiffContext(object? sender, ContextRequestedEventArgs e)
+    {
+        if (e.Source is not Control source) return;
+        var part = source.GetSelfAndVisualAncestors().OfType<Control>().TakeWhile(x => x is not ListBoxItem).Select(x => x.Tag as string).FirstOrDefault(t => t is not null) ?? "text";
+        var item = source.GetSelfAndVisualAncestors().OfType<ListBoxItem>().FirstOrDefault();
+        if (item?.DataContext is not Row row) return;
+        var menu = new ContextMenu();
+        if (_doc is { } doc && _docRepo is { } repo && row.Diff is { } line && doc.CanPatchHunk(line))
+        {
+            var staged = _docStaged;
+            var hunkNo = line.Hunk + 1;
+            var canLine = doc.CanPatchLine(line);
+            var lineNo = line.Kind == DiffKind.Add ? line.New : line.Old;
+            MenuItem Hunk(string label, bool cached, bool reverse, bool confirm = false) => Ui.Item(label, async () =>
+            {
+                if (confirm && !await Ui.ConfirmAsync(Ui.Owner(this), "Discard hunk", $"Throw away hunk {hunkNo} of the changes to {doc.Files[line.File].Path}? This cannot be undone.", "Discard")) return;
+                await Repos.ApplyPatchAsync(repo, doc.HunkPatch(line.File, line.Hunk, reverse), cached, reverse);
+            });
+            MenuItem Line(string label, bool cached, bool reverse, bool confirm = false) => Ui.Item(label, async () =>
+            {
+                if (confirm && !await Ui.ConfirmAsync(Ui.Owner(this), "Discard line", $"Throw away the change on line {lineNo} of {doc.Files[line.File].Path}? This cannot be undone.", "Discard")) return;
+                await Repos.ApplyPatchAsync(repo, doc.LinePatch(line.File, line.Hunk, line.Body, reverse), cached, reverse);
+            });
+            if (canLine && part != "strip")
+            {
+                menu.Items.Add(staged ? Line($"Unstage Line {lineNo}", true, true) : Line($"Stage Line {lineNo}", true, false));
+                if (!staged) menu.Items.Add(Line($"Discard Line {lineNo}…", false, true, true));
+            }
+            if (part != "number" || !canLine)
+            {
+                if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+                menu.Items.Add(staged ? Hunk($"Unstage Hunk {hunkNo}", true, true) : Hunk($"Stage Hunk {hunkNo}", true, false));
+                if (!staged) menu.Items.Add(Hunk($"Discard Hunk {hunkNo}…", false, true, true));
+            }
+            menu.Items.Add(new Separator());
+        }
+        var copy = row.Commit is { } c ? $"{c.Hash} {c.Subject}" : row.Spans is not null ? string.Concat(row.Spans.Select(s => s.Text)) : row.Text;
+        menu.Items.Add(Ui.Item("Copy Line", () => { _ = App.Services.Host.SetClipboardAsync(copy); }));
+        if (row.Commit is { } commit && _branch is { } b && Repos.Find(b.RepoId) is { } branchRepo)
+        {
+            menu.Items.Insert(0, new Separator());
+            menu.Items.Insert(0, Ui.Item("View Commit", () => ViewCommitAsync(branchRepo, commit.Hash), icon: Icons.Eye));
+        }
+        e.Handled = true;
+        menu.Open(item);
+    }
+
+    // ---- actions ----
+
+    private async Task ViewCommitAsync(RepoEntry repo, string hash)
+    {
+        await Ui.TryAsync(this, async () =>
+        {
+            var info = await Repos.CommitInfoAsync(repo, hash) ?? throw new InvalidOperationException($"Commit {hash} was not found in {repo.Name}.");
+            var files = await Repos.CommitFilesAsync(repo, info.Hash);
+            _view = new CommitView(repo, info, files);
+            _viewFile = files.Count > 0 ? new CommitFileRef(repo.Id, info.Hash, files[0]) : null;
+            _lastSelected = null;
+            await RefreshAsync();
+        }, "Could not open the commit");
+    }
+
+    private async Task StageSelectedAsync()
+    {
+        if (_change is not { } c || Repos.Find(c.Change.RepoId) is not { } repo) return;
+        await Ui.TryAsync(this, () => c.Staged ? Repos.UnstageAsync(repo, c.Change.Path) : Repos.StageAsync(repo, c.Change.Path), "git said no");
+    }
+
+    private async Task DiscardAsync(RepoEntry repo, RepoChange c)
+    {
+        var question = c.Untracked ? $"Delete {c.Path}? It is not tracked by git, so it cannot be brought back." : $"Throw away the changes to {c.Path} that are not staged? This cannot be undone.";
+        if (!await Ui.ConfirmAsync(Ui.Owner(this), c.Untracked ? "Delete file" : "Discard changes", question, c.Untracked ? "Delete" : "Discard")) return;
+        await Repos.DiscardAsync(repo, c.Path, c.Untracked);
+    }
+
+    private async Task CommitAsync(RepoEntry? repo)
+    {
+        if (repo is null) { Ui.Toast(this, "Choose a repository first", "Select one in the list, or right-click its name."); return; }
+        var status = await Repos.StatusAsync(repo);
+        var staged = status.Changes.Count(c => c.Staged);
+        if (staged == 0) { Ui.Toast(this, "Nothing is staged", $"Stage files, hunks or lines in {repo.Name} first."); return; }
+        var message = new TextBox { AcceptsReturn = true, MinHeight = 90, TextWrapping = TextWrapping.Wrap, PlaceholderText = "What changed, and why" };
+        await Ui.FormAsync(Ui.Owner(this), $"Commit to {repo.Name}", Ui.Column(10,
+            Ui.Text($"{staged} staged file{(staged == 1 ? "" : "s")} on {status.Branch ?? "?"}.", "dim", 12.5), Ui.Field("Message", message)), async () =>
+        {
+            if (string.IsNullOrWhiteSpace(message.Text)) return "Write a commit message.";
+            await Repos.CommitAsync(repo, message.Text.Trim());
+            return null;
+        }, "Commit", 560);
+    }
+
+    private async Task SwitchAsync(RepoEntry repo, RepoBranch branch)
+    {
+        await Repos.SwitchAsync(repo, branch);
+        _branchSignature = "";
+        Ui.Toast(this, "Switched branch", $"{repo.Name} is now on {(branch.IsRemote ? branch.Name[(branch.Name.IndexOf('/') + 1)..] : branch.Name)}");
+    }
+
+    private async Task NewBranchAsync(RepoEntry repo, string from)
+    {
+        var name = await Ui.PromptAsync(Ui.Owner(this), "New branch", $"Name of the new branch, starting at {from}");
+        if (string.IsNullOrWhiteSpace(name)) return;
+        await Repos.CreateBranchAsync(repo, name.Trim(), from);
+        _branchSignature = "";
+        Ui.Toast(this, "Branch created", $"{repo.Name} is now on {name.Trim()}");
+    }
+
+    /// <summary>The "Change Branch" dialog: pick an existing branch, or type a new name to create one.</summary>
+    private async Task ChangeBranchAsync(RepoEntry repo)
+    {
+        var branches = await Repos.BranchesAsync(repo);
+        var current = branches.FirstOrDefault(b => b.IsCurrent);
+        var filter = new TextBox { PlaceholderText = "Filter, or type a new branch name" };
+        var list = new ListBox { Classes = { "plain" }, MaxHeight = 320, MinHeight = 120 };
+        var create = new CheckBox { Content = "Create this branch", IsVisible = false };
+        void Fill()
+        {
+            var text = (filter.Text ?? "").Trim();
+            list.Items.Clear();
+            foreach (var b in branches.Where(b => text.Length == 0 || b.Name.Contains(text, StringComparison.OrdinalIgnoreCase)))
+                list.Items.Add(new ListBoxItem
+                {
+                    Tag = b, IsSelected = b.IsCurrent && text.Length == 0,
+                    Content = Ui.Row(8, new PathIcon { Data = b.IsCurrent ? Icons.CheckCircle : Icons.SourceBranch, Width = 13, Height = 13, Foreground = b.IsCurrent ? Ui.Tk("ok") : Ui.Dim },
+                        new TextBlock { Text = b.Name }, new TextBlock { Text = b.IsRemote ? "remote" : b.Date, Foreground = Ui.Dim, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center }),
+                });
+            var exists = branches.Any(b => b.Name.Equals(text, StringComparison.OrdinalIgnoreCase));
+            create.IsVisible = text.Length > 0 && !exists;
+            create.Content = $"Create a new branch \"{text}\" from {current?.Name ?? "HEAD"}";
+            create.IsChecked = create.IsVisible && list.Items.Count == 0;
+            if (list.SelectedItem is null && list.Items.Count > 0 && text.Length > 0) list.SelectedIndex = 0;
+        }
+        filter.TextChanged += (_, _) => Fill();
+        Fill();
+        await Ui.FormAsync(Ui.Owner(this), $"Change branch — {repo.Name}", Ui.Column(10,
+            Ui.Text($"Currently on {current?.Name ?? "a detached HEAD"}.", "dim", 12.5), filter, list, create), async () =>
+        {
+            if (create.IsVisible && create.IsChecked == true) await Repos.CreateBranchAsync(repo, filter.Text!.Trim());
+            else if ((list.SelectedItem as ListBoxItem)?.Tag is RepoBranch b) { if (!b.IsCurrent) await Repos.SwitchAsync(repo, b); }
+            else return "Pick a branch.";
+            _branchSignature = "";
+            return null;
+        }, "Switch", 520);
+    }
+
+    private void EditFile()
+    {
+        Ui.Try(this, () =>
+        {
+            if (_file is { } f && Repos.Find(f.RepoId) is { } fileRepo) Ui.OpenInEditor(f.Path, fileRepo.Path);
+            else if (_change is { } c && Repos.Find(c.Change.RepoId) is { } repo) Ui.OpenInEditor(c.Change.Path, repo.Path);
+        }, "Could not start the editor");
+    }
+
+    private void OpenTerminal()
+    {
+        if (CurrentRepo is not { } repo) { Ui.Toast(this, "Select a repository first"); return; }
+        OpenTerminalIn(repo);
+    }
+
+    private void OpenTerminalIn(RepoEntry repo) => Ui.Try(this, () =>
+    {
+        var session = App.Services.Terminals.Create(new TerminalStartOptions(Cwd: repo.Path));
+        App.Services.Host.Navigate("terminals");
+        App.Services.Host.SelectTerminal(session.Id);
+    });
+
+    private async Task AddAsync()
+    {
+        string? path = null;
+        try
+        {
+            var picked = await Ui.Owner(this).StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Add a git repository", AllowMultiple = false });
+            path = picked.FirstOrDefault()?.TryGetLocalPath();
+        }
+        catch { /* no folder picker available: fall through to typing the path */ }
+        path ??= await Ui.PromptAsync(Ui.Owner(this), "Add repository", "Path to a folder inside a git repository", App.Services.Paths.WorkingDir);
+        if (string.IsNullOrWhiteSpace(path)) return;
+        await Ui.TryAsync(this, async () => { _repoId = (await Repos.AddAsync(path.Trim())).Id; ClearSelection(); await RefreshAsync(); }, "Could not add the repository");
+    }
+
+    private async Task RemoveAsync()
+    {
+        if (_repoId is null || Repos.Find(_repoId) is not { } repo) return;
+        if (!await Ui.ConfirmAsync(Ui.Owner(this), "Remove repository", $"Remove \"{repo.Name}\" from the list? The files stay where they are.", "Remove")) return;
+        Ui.Try(this, () => Repos.Remove(repo.Id));
+    }
+}

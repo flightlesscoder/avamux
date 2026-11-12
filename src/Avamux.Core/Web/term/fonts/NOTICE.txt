@@ -1,0 +1,4 @@
+SymbolsNerdFontMono-Regular.ttf is "Symbols Nerd Font Mono" from the Nerd Fonts project
+(https://github.com/ryanoasis/nerd-fonts), distributed under the MIT license.
+avamux serves it to its terminal view as a last-resort fallback so powerline and icon
+glyphs render even when no Nerd Font is installed on the machine.

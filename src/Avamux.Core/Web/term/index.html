@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>avamux terminals</title>
+<link rel="stylesheet" href="xterm.css">
+<style>
+  @font-face { font-family: "avamux-symbols"; src: url("fonts/SymbolsNerdFontMono-Regular.ttf") format("truetype"); font-display: block; }
+  html, body { margin: 0; height: 100%; background: #11131a; overflow: hidden; }
+  #root { position: absolute; inset: 0; }
+  .term { position: absolute; inset: 4px 0 0 6px; visibility: hidden; }
+  .term.active { visibility: visible; }
+  #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+           color: #6b7280; font: 14px system-ui, sans-serif; }
+  #menu { position: absolute; display: none; z-index: 10; background: var(--panel, #1f2330); border: 1px solid var(--line, #3b4252); border-radius: 6px;
+          padding: 4px; font: 13px system-ui, sans-serif; color: var(--text, #d8dee9); box-shadow: 0 6px 24px rgba(0,0,0,.5); min-width: 150px; }
+  #menu div { padding: 6px 12px; border-radius: 4px; cursor: default; display: flex; justify-content: space-between; gap: 24px; }
+  #menu div:hover { background: var(--line, #3b4252); }
+  #menu span { color: var(--dim, #7b8496); }
+  .xterm-viewport::-webkit-scrollbar { width: 10px; }
+  .xterm-viewport::-webkit-scrollbar-thumb { background: var(--line, #3b4252); border-radius: 5px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div id="empty">No terminal open</div>
+<div id="menu">
+  <div data-a="copy">Copy <span>Ctrl+Shift+C</span></div>
+  <div data-a="paste">Paste <span>Ctrl+Shift+V</span></div>
+  <div data-a="selectAll">Select all</div>
+  <div data-a="clear">Clear scrollback</div>
+</div>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script src="addon-unicode11.js"></script>
+<script src="addon-web-links.js"></script>
+<script src="addon-webgl.js"></script>
+<script src="options.js"></script>
+<script src="terminal.js"></script>
+</body>
+</html>

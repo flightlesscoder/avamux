@@ -1,0 +1,204 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Threading;
+using Avamux.Core.Commands;
+using Avamux.Views;
+
+namespace Avamux;
+
+public sealed class MainWindow : AppWindow
+{
+    private sealed record NavItem(string Key, string Label, string Tip, Geometry Icon);
+
+    private static readonly NavItem[] NavItems =
+    [
+        new("terminals", "Terminals", "Terminals", Icons.Console),
+        new("search", "Search", "Search everything", Icons.Magnify),
+        new("today", "Today", "Open today's daily note in the wiki", Icons.CalendarToday),
+        new("settings", "Settings", "Settings", Icons.Cog),
+        new("watching", "Watching", "Watching", Icons.Eye),
+        new("events", "Events", "Events", Icons.CalendarClock),
+        new("dashboard", "Dashboard", "Dashboard", Icons.ViewDashboard),
+        new("logs", "Logs", "Logs", Icons.TextBoxOutline),
+        new("wiki", "Wiki", "Wiki", Icons.BookOpenVariant),
+        new("repositories", "Repos", "Repositories", Icons.SourceBranch),
+        new("chat", "AI Chat", "AI Chat", Icons.Forum),
+        new("workloads", "Workloads", "Workloads: providers, work queues and models", Icons.Server),
+    ];
+
+    private readonly Dictionary<string, Control> _pages = new();
+    private readonly ListBox _nav = new() { Classes = { "nav" }, Background = Brushes.Transparent, Padding = new Thickness(0, 8), SelectionMode = SelectionMode.Single };
+    private readonly Panel _pageHost = new();
+    private readonly StackPanel _toasts = new() { Spacing = 8 };
+    private readonly Popup _toastPopup;
+    private string _navSignature = "";
+    private bool _buildingNav;
+
+    public MainWindow()
+    {
+        Title = "avamux";
+        Icon = AppIcon.Window;
+        Width = 1320; Height = 840; MinWidth = 720; MinHeight = 420;
+        // Toasts live in a popup (its own window) so they show above the native web views.
+        _toastPopup = new Popup
+        {
+            PlacementTarget = _pageHost, Placement = PlacementMode.AnchorAndGravity, PlacementAnchor = Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.BottomRight,
+            PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.TopLeft, HorizontalOffset = -18, VerticalOffset = -18, IsLightDismissEnabled = false, Child = _toasts,
+        };
+        Body = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+            Children =
+            {
+                new Border { Background = Ui.Tk("bgDeep"), BorderBrush = Ui.Tk("lineSoft"), BorderThickness = new Thickness(0, 0, 1, 0), Child = _nav },
+                _pageHost.At(0, 1),
+                _toastPopup.At(0, 1),
+            },
+        };
+        _nav.SelectionChanged += (_, _) =>
+        {
+            if (_buildingNav || _nav.SelectedItem is not ListBoxItem { Tag: string key }) return;
+            if (key == "today") Dispatcher.UIThread.Post(OpenToday); else Show(key);
+        };
+        // Terminals exists from the start so sessions created over IPC have a view to attach to.
+        Terminals = new TerminalsPage();
+        _pages["terminals"] = Terminals;
+        _pageHost.Children.Add(Terminals);
+        BuildNav();
+        App.Services.Config.Changed += () => Dispatcher.UIThread.Post(BuildNav);
+        Ui.ThemeChanged += () => (_pages.GetValueOrDefault(CurrentPage) as IPage)?.OnShown();
+        var start = App.Services.Config.Settings.Ui.StartPage;
+        Navigate(CommandRegistry.Pages.Contains(start) && IsShown(start) ? start : "terminals");
+    }
+
+    public TerminalsPage Terminals { get; }
+    public string CurrentPage { get; private set; } = "terminals";
+
+    public T? Page<T>(string key) where T : Control => GetOrCreate(key) as T;
+
+    /// <summary>The AI pages are only in the navigation when switched on under Settings → AI Workloads.</summary>
+    private static bool IsShown(string key)
+    {
+        var ai = App.Services.Config.Settings.Ai;
+        return key switch { "chat" => ai.Chat, "workloads" => ai.Workloads, _ => true };
+    }
+
+    private void BuildNav()
+    {
+        var settings = App.Services.Config.Settings;
+        var mini = settings.Ui.NavStyle.Trim().Equals("mini", StringComparison.OrdinalIgnoreCase);
+        var signature = $"{mini}|{settings.Ai.Chat}|{settings.Ai.Workloads}";
+        if (signature == _navSignature) return;
+        _navSignature = signature;
+        _buildingNav = true;
+        try
+        {
+            _nav.Items.Clear();
+            _nav.Width = mini ? 46 : 92;
+            _nav.Classes.Set("mini", mini);
+            foreach (var item in NavItems.Where(i => IsShown(i.Key)))
+            {
+                var content = new StackPanel { Spacing = 4, Margin = new Thickness(0, mini ? 8 : 9), HorizontalAlignment = HorizontalAlignment.Center };
+                content.Children.Add(new PathIcon { Data = item.Icon, Width = mini ? 17 : 22, Height = mini ? 17 : 22 });
+                if (!mini) content.Children.Add(new TextBlock { Text = item.Label, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center });
+                var entry = new ListBoxItem { Tag = item.Key, Content = content, HorizontalContentAlignment = HorizontalAlignment.Center };
+                ToolTip.SetTip(entry, item.Tip);
+                ToolTip.SetPlacement(entry, PlacementMode.Right);
+                if (mini) ToolTip.SetShowDelay(entry, 200);
+                _nav.Items.Add(entry);
+            }
+            _nav.SelectedItem = NavEntry(CurrentPage);
+        }
+        finally { _buildingNav = false; }
+        // The page that was showing may just have been switched off.
+        if (!IsShown(CurrentPage)) Navigate("terminals");
+    }
+
+    private ListBoxItem? NavEntry(string key) => _nav.Items.OfType<ListBoxItem>().FirstOrDefault(i => (string?)i.Tag == key);
+
+    private Control GetOrCreate(string key)
+    {
+        if (_pages.TryGetValue(key, out var page)) return page;
+        page = key switch
+        {
+            "search" => new SearchPage(),
+            "settings" => new SettingsPage(),
+            "watching" => new WatchingPage(),
+            "events" => new EventsPage(),
+            "dashboard" => new DashboardPage(),
+            "logs" => new LogsPage(),
+            "wiki" => new WikiPage(),
+            "repositories" => new RepositoriesPage(),
+            "chat" => new ChatPage(),
+            "workloads" => new WorkloadsPage(),
+            _ => new TextBlock { Text = key },
+        };
+        page.IsVisible = false;
+        _pages[key] = page;
+        _pageHost.Children.Add(page);
+        return page;
+    }
+
+    public void Navigate(string key)
+    {
+        if (key == "today") { OpenToday(); return; }
+        // A page whose navigation entry is hidden can still be shown (from the CLI, say); nothing is selected then.
+        if (NavEntry(key) is not { } item) { if (CommandRegistry.Pages.Contains(key)) { _buildingNav = true; _nav.SelectedItem = null; _buildingNav = false; Show(key); } return; }
+        if (!ReferenceEquals(_nav.SelectedItem, item)) _nav.SelectedItem = item; else Show(key);
+    }
+
+    /// <summary>Opens today's daily note in the wiki, creating it when it does not exist yet.</summary>
+    public void OpenToday()
+    {
+        Ui.Try(this, () =>
+        {
+            var note = App.Services.Wiki.EnsureDailyNote(DateTime.Now, App.Services.Config.Settings.Wiki);
+            Navigate("wiki");
+            Page<WikiPage>("wiki")?.Open(note);
+        }, "Could not open today's note");
+    }
+
+    private void Show(string key)
+    {
+        var page = GetOrCreate(key);
+        foreach (var p in _pages.Values) p.IsVisible = ReferenceEquals(p, page);
+        CurrentPage = key;
+        (page as IPage)?.OnShown();
+    }
+
+    public void Toast(string title, string message)
+    {
+        var toast = new Border
+        {
+            Background = Ui.Tk("panelHi"), BorderBrush = Ui.Tk("lineStrong"), BorderThickness = new Thickness(1),
+            CornerRadius = Ui.R(8), Padding = new Thickness(14, 10), MaxWidth = 380,
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock { Text = title, FontWeight = FontWeight.SemiBold, Foreground = Ui.Tk("text"), TextWrapping = TextWrapping.Wrap },
+                    new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Tk("textSoft"), IsVisible = message.Length > 0 },
+                },
+            },
+        };
+        void Remove()
+        {
+            _toasts.Children.Remove(toast);
+            if (_toasts.Children.Count == 0) _toastPopup.IsOpen = false;
+        }
+        toast.PointerPressed += (_, _) => Remove();
+        _toasts.Children.Add(toast);
+        while (_toasts.Children.Count > 4) _toasts.Children.RemoveAt(0);
+        _toastPopup.IsOpen = IsVisible;
+        DispatcherTimer.RunOnce(Remove, TimeSpan.FromSeconds(6));
+    }
+}
+
+/// <summary>Pages that want to refresh when they become visible.</summary>
+public interface IPage
+{
+    void OnShown();
+}

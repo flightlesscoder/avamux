@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Markdig" Version="1.3.2" />
+    <ProjectReference Include="..\Avamux.Plugin.Abstractions\Avamux.Plugin.Abstractions.csproj" />
+    <EmbeddedResource Include="Web\**\*" />
+    <InternalsVisibleTo Include="Avamux.Tests" />
+  </ItemGroup>
+</Project>
