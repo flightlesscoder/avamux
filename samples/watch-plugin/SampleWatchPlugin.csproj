@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A watch provider plugin. Build it, then copy bin/…/SampleWatchPlugin.dll into avamux's plugins folder
+       (see `avamux app paths`), or point a watch of kind "plugin" at the DLL with the "assembly" setting. -->
+  <PropertyGroup>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The contract assembly is provided by avamux at run time, so it is not copied next to the plugin. -->
+    <ProjectReference Include="..\..\src\Avamux.Plugin.Abstractions\Avamux.Plugin.Abstractions.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Avamux/Avamux.csproj" />
+    <Project Path="src/Avamux.Core/Avamux.Core.csproj" />
+    <Project Path="src/Avamux.Plugin.Abstractions/Avamux.Plugin.Abstractions.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/watch-plugin/SampleWatchPlugin.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Avamux.Tests/Avamux.Tests.csproj" />
+  </Folder>
+</Solution>
