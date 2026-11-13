@@ -162,7 +162,7 @@ public static class CliParser
         return sb.ToString();
     }
 
-    private static readonly string[] GroupOrder = ["app", "terminal", "settings", "watch", "event", "dashboard", "logs", "wiki", "repo"];
+    private static readonly string[] GroupOrder = ["app", "terminal", "settings", "watch", "event", "dashboard", "logs", "wiki", "repo", "page"];
 
     /// <summary>Human-friendly rendering of a command result for the terminal.</summary>
     public static string Format(JsonNode? result)

@@ -56,10 +56,12 @@ public sealed partial class CommandRegistry
             ["repositories"] = s.Repos.Items.Count,
             ["webServer"] = s.Web.BaseUrl,
         });
-        Add("app nav", $"Switch the window to a page: {string.Join(", ", Pages)}.", [P("page", "Page name.", true)], a =>
+        Add("app nav", $"Switch the window to a page: {string.Join(", ", Pages)}, or the name of a custom page.", [P("page", "Page name.", true)], a =>
         {
+            // A custom page (see `avamux page list`) is found by its exact name or key; built-in pages by a prefix.
+            if (s.Nav.Find(a.Require("page")) is { Enabled: true } custom) { s.Host.Navigate(custom.Key); return custom.Name; }
             var page = Pages.FirstOrDefault(p => p.StartsWith(a.Require("page"), StringComparison.OrdinalIgnoreCase))
-                ?? throw new ArgumentException($"Unknown page '{a.Str("page")}'. Pages: {string.Join(", ", Pages)}.");
+                ?? throw new ArgumentException($"Unknown page '{a.Str("page")}'. Pages: {string.Join(", ", Pages.Concat(s.Nav.Pages.Where(p => p.Enabled).Select(p => p.Name)))}.");
             s.Host.Navigate(page);
             return page;
         });

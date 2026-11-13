@@ -20,30 +20,32 @@
   /* Heartbeat cursor: drawn by us under the text, in place of xterm's own cursor. */
   .pulse-on .xterm-rows { position: relative; z-index: 1; }
   .term.pulse-on .xterm .xterm-rows .xterm-cursor.xterm-cursor.xterm-cursor.xterm-cursor { background-color: transparent !important; outline: none !important; box-shadow: none !important; }
-  .pulse-cursor { position: absolute; z-index: 0; display: none; box-sizing: border-box; pointer-events: none; border-radius: 1px;
-                  background: var(--pc); --lo: calc(var(--pg) * 5px); --hi: calc(var(--pg) * 18px); }
-  .pulse-cursor.outline { background: transparent; border: 1px solid var(--pc); }
-  .pulse-cursor.on { display: block; animation: avamux-beat-once var(--pd, 2s) ease-in-out infinite; }
-  .pulse-cursor.on.double { animation-name: avamux-beat; }
-  .pulse-cursor.on.idle { animation: none; background: transparent; border: 1px solid var(--pc); opacity: .7; box-shadow: none; }
-  .pulse-cursor.bar.on.idle { background: var(--pc); border: 0; opacity: .45; }
-  @keyframes avamux-beat-once {
-    0%, 100% { opacity: .55; box-shadow: 0 0 var(--lo) 0 var(--pc); }
-    35% { opacity: 1; box-shadow: 0 0 var(--hi) calc(var(--pg) * 3px) var(--pc), 0 0 calc(var(--hi) * 2.2) calc(var(--pg) * 2px) color-mix(in srgb, var(--pc) 45%, transparent); }
-  }
-  @keyframes avamux-beat {
-    0%, 42%, 100% { opacity: .62; box-shadow: 0 0 var(--lo) 0 var(--pc); }
-    9%  { opacity: 1;   box-shadow: 0 0 var(--hi) calc(var(--pg) * 3px) var(--pc), 0 0 calc(var(--hi) * 2.2) calc(var(--pg) * 2px) color-mix(in srgb, var(--pc) 45%, transparent); }
-    19% { opacity: .7;  box-shadow: 0 0 var(--lo) 0 var(--pc); }
-    28% { opacity: .92; box-shadow: 0 0 calc(var(--hi) * .7) calc(var(--pg) * 2px) var(--pc), 0 0 calc(var(--hi) * 1.5) 0 color-mix(in srgb, var(--pc) 35%, transparent); }
-  }
-  /* CRT effect: an overlay that lets clicks through, plus a soft glow on the text. */
-  #crt { position: absolute; inset: 0; z-index: 5; pointer-events: none; display: none; }
-  .crt-on #crt { display: block;
-    background:
-      radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,calc(var(--ci) * .55)) 100%),
-      repeating-linear-gradient(to bottom, rgba(0,0,0,calc(var(--ci) * .32)) 0, rgba(0,0,0,calc(var(--ci) * .32)) 1px, transparent 1px, transparent 3px); }
-  .crt-on #crt::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 calc(var(--ci) * 90px) rgba(0,0,0,calc(var(--ci) * .6)); }
+  /* Only opacity is animated (the glow is a fixed shadow on ::after that fades in and out), and in steps: the web
+     view paints on the CPU and hands every changed frame to the window, so a smooth 60 frames a second costs
+     several percent of a core for as long as the terminal is open. Each rise or fall takes 14 steps instead. */
+  .pulse-cursor { position: absolute; left: 0; top: 0; z-index: 0; display: none; pointer-events: none; will-change: transform;
+                  --lo: calc(var(--pg) * 5px); --hi: calc(var(--pg) * 18px); }
+  .pulse-cursor.on { display: block; }
+  .pulse-cursor::before, .pulse-cursor::after { content: ""; position: absolute; inset: 0; box-sizing: border-box; border-radius: 1px; will-change: opacity; }
+  .pulse-cursor::before { background: var(--pc); box-shadow: 0 0 var(--lo) 0 var(--pc); opacity: .55;
+                          animation: avamux-beat-once var(--pd, 2s) steps(14) infinite; }
+  .pulse-cursor::after { opacity: 0; animation: avamux-glow-once var(--pd, 2s) steps(14) infinite;
+                         box-shadow: 0 0 var(--hi) calc(var(--pg) * 3px) var(--pc), 0 0 calc(var(--hi) * 2.2) calc(var(--pg) * 2px) color-mix(in srgb, var(--pc) 45%, transparent); }
+  .pulse-cursor.outline::before { background: transparent; border: 1px solid var(--pc); }
+  .pulse-cursor.double::before { animation-name: avamux-beat; }
+  .pulse-cursor.double::after { animation-name: avamux-glow; }
+  .pulse-cursor.idle::before { animation: none; background: transparent; border: 1px solid var(--pc); opacity: .7; box-shadow: none; }
+  .pulse-cursor.idle::after { display: none; }
+  .pulse-cursor.bar.idle::before { background: var(--pc); border: 0; opacity: .45; }
+  @keyframes avamux-beat-once { 0%, 100% { opacity: .55; } 35% { opacity: 1; } }
+  @keyframes avamux-glow-once { 0%, 100% { opacity: 0; } 35% { opacity: 1; } }
+  @keyframes avamux-beat { 0%, 42%, 100% { opacity: .62; } 9% { opacity: 1; } 19% { opacity: .7; } 28% { opacity: .92; } }
+  @keyframes avamux-glow { 0%, 42%, 100% { opacity: 0; } 9% { opacity: 1; } 19% { opacity: .08; } 28% { opacity: .55; } }
+  /* CRT effect: an overlay that lets clicks through, plus a soft glow on the text. The overlay is a canvas that
+     terminal.js draws once per size: the web view paints on the CPU, and gradients there cost a full repaint of
+     the screen for every frame of output, where a ready-made bitmap is only copied. */
+  #crt { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; display: none; }
+  .crt-on #crt { display: block; }
   .crt-on.crt-flicker #crt { animation: avamux-flicker 5s steps(1) infinite; }
   .crt-on .xterm-rows { text-shadow: 0 0 calc(var(--ci) * 5px) currentColor; }
   @keyframes avamux-flicker { 0%, 100% { opacity: 1; } 7% { opacity: .93; } 8% { opacity: 1; } 52% { opacity: .96; } 53% { opacity: 1; } 81% { opacity: .92; } 82% { opacity: 1; } }
@@ -53,7 +55,7 @@
 </head>
 <body>
 <div id="root"></div>
-<div id="crt"></div>
+<canvas id="crt"></canvas>
 <div id="empty">No terminal open</div>
 <div id="menu">
   <div data-a="copy">Copy <span>Ctrl+Shift+C</span></div>

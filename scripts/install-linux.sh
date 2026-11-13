@@ -2,7 +2,9 @@
 # Installs avamux for the current user: a release build in ~/.local/lib/avamux, the `avamux` command in
 # ~/.local/bin, the icon, and an application-menu entry. Run it again after changing the code to update.
 set -eu
-repo="$(cd "$(dirname "$0")/.." && pwd)"
+# The physical path: where /home is a link (to /var/home, say), a build that sees the repository under both names
+# mixes them up and fails.
+repo="$(cd "$(dirname "$0")/.." && pwd -P)"
 lib="$HOME/.local/lib/avamux"
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
 

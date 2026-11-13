@@ -115,6 +115,7 @@ public sealed class SettingsPage : UserControl, IPage
     private readonly TextBlock _findStatus = new() { Foreground = Ui.Dim, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly List<(Control Card, List<string> Keys)> _cards = [];
     private readonly List<Control> _filterHidden = [];
+    private readonly CustomPagesCard _customPages = new();
     private bool _loading;
 
     private static ConfigService Config => App.Services.Config;
@@ -165,6 +166,8 @@ public sealed class SettingsPage : UserControl, IPage
                 body.Children.Add(card);
                 _cards.Add((card, all.Where(v => v.Path.StartsWith(prefix + ".", StringComparison.Ordinal)).Select(v => v.Path).ToList()));
             }
+            // The navigation is part of the window, so the user's own pages come right after its settings.
+            if (prefix == "ui") body.Children.Add(_customPages);
         }
         _filterHidden.Add(_themeTiles);
         _find.TextChanged += (_, _) => _filterSoon();
@@ -221,7 +224,8 @@ public sealed class SettingsPage : UserControl, IPage
             card.IsVisible = any;
         }
         foreach (var c in _filterHidden) c.IsVisible = hits is null;
-        _findStatus.Text = hits is null ? "" : shown == 0 ? "Nothing found" : $"{shown} setting{(shown == 1 ? "" : "s")}";
+        _customPages.IsVisible = hits is null || _customPages.Matches(query);
+        _findStatus.Text = hits is null ? "" : shown > 0 ? $"{shown} setting{(shown == 1 ? "" : "s")}" : _customPages.IsVisible ? "" : "Nothing found";
         if (hits is not null) _scroll.Offset = default;
     }
 

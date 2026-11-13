@@ -31,6 +31,7 @@ Linux needs WebKitGTK 4.1 (`libwebkit2gtk-4.1`). macOS uses the system WKWebView
 | Wiki | Markdown editor and live preview with folders, links (`[[Page]]`), front matter, syntax-highlighted code blocks and pictures. Paste a picture straight into a page: it is saved next to the page and linked. Click a picture to zoom and pan; right-click it for Show in Folder, Copy and Copy Path. Also previews images, PDFs, audio, video and text files, and opens anything else in its default app. Entries can be opened in their own window. The last scroll position of recent files is remembered (`ui-state.json` in the data folder). |
 | Repos | Changes, history, branches and pull requests for one configured git repository or all of them. Stage or unstage files, hunks (right-click the coloured strip) or single lines (right-click a line number); diff or whole-file view; switch branches; inspect a commit file by file; cherry-pick, revert, reset, tag. |
 | AI Chat, Workloads | Placeholders, shown when switched on under Settings → AI Workloads. |
+| Your own | Pages you add under Settings → Custom pages: a terminal running one command, a web page, or a .NET plugin. See [Custom pages](#custom-pages). |
 
 ## Themes
 
@@ -91,6 +92,47 @@ avamux theme set classic90s
 
 Add `--json` to any command for machine-readable output. The same commands are available to dashboard
 JavaScript: `await avamux.command('terminal new', { name: 'build' })`.
+
+## Custom pages
+
+Settings → Custom pages (or `avamux page …`) adds entries of your own to the navigation, each with a name and an
+icon (one of the built-in icons by name, or SVG path data for a 24x24 box). Adding, changing, reordering and
+switching them takes effect at once; nothing needs a restart. They are stored in `nav.json` in the data folder.
+
+- **Terminal**: one command in a terminal of its own that fills the page: `btm`, `lazygit`, `lazydocker`,
+  `ssh -p 2222 -L 8080:localhost:80 me@host`. The line is run through your login shell. When the program ends the
+  page offers to start it again (and does so by itself the next time you go to the page).
+
+  ```sh
+  avamux page add Monitor --kind terminal --command "btm" --icon pulse
+  avamux page add Git --kind terminal --command "lazygit" --cwd ~/code/project --icon source-branch
+  ```
+
+- **Web**: a web page (Teams, Outlook, Gmail, a Grafana board) with back, forward, reload and the developer tools.
+  The page gets a deliberately small `window.avamux`: `needsInput(message)`, `clearNeedsInput()`,
+  `notify(title, message)` and `setBadge(text)`. It can draw attention to itself and nothing else: it cannot run
+  commands or read anything from avamux. A page's **script** (JavaScript run after each load) is where to use it
+  for sites that are not yours:
+
+  ```sh
+  avamux page add Mail --kind web --url https://mail.example.com --icon email \
+    --script "setInterval(() => avamux.setBadge((document.title.match(/\((\d+)\)/) || [])[1]), 3000)"
+  ```
+
+- **Plugin**: a page built by a .NET DLL. Implement `Avamux.Plugins.IPagePlugin` (project
+  `src/Avamux.Plugin.Abstractions`): `CreateView(IAvamuxHost host)` returns an Avalonia control. A plugin is fully
+  trusted: `IAvamuxHost` runs any avamux command (`CommandAsync`, `RunAsync`), reads and writes settings, navigates,
+  notifies, and hands out avamux's own services. `samples/page-plugin/` is a page of sample controls, several of
+  them calling avamux. After rebuilding a plugin, reload it with the page's reload button or `avamux page reload`.
+
+  ```sh
+  dotnet build samples/page-plugin
+  avamux page add Sample --kind plugin --assembly "$PWD/samples/page-plugin/bin/Debug/net10.0/SamplePagePlugin.dll"
+  ```
+
+A page that wants you (`avamux.needsInput`, `host.RequestAttention`, `avamux page attention <page> <message>`)
+gets a dot on its navigation entry and a notification, unless it is the page you are looking at; the dot goes
+when you open the page. `avamux page badge <page> <text>` shows up to four characters on the entry.
 
 ## Watches are pluggable
 

@@ -195,6 +195,7 @@ public sealed partial class CommandRegistry
         r.AddWikiCommands(s!);
         r.AddRepoCommands(s!);
         r.AddSearchCommands(s!);
+        r.AddPageCommands(s!);
         return r;
     }
 }
