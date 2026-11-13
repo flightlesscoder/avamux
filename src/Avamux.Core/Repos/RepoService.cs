@@ -196,6 +196,25 @@ public sealed class RepoService
             .Select(p => new RepoCommit(p[0], p[1], p[2], p[3])).ToList();
     }
 
+    /// <summary>How many commits the current branch has in all, or null when there are none or git fails.</summary>
+    public async Task<int?> CommitCountAsync(RepoEntry repo)
+    {
+        var r = await GitAsync(repo.Path, "rev-list", "--count", "HEAD");
+        return r.ExitCode == 0 && int.TryParse(r.Stdout.Trim(), out var n) ? n : null;
+    }
+
+    /// <summary>
+    /// Where a commit sits in the history of the current branch: 0 is the newest. Null when the commit is not on
+    /// the current branch (it may be on another one).
+    /// </summary>
+    public async Task<int?> CommitPositionAsync(RepoEntry repo, string commit)
+    {
+        if (commit.StartsWith('-')) throw new ArgumentException("Invalid commit.");
+        if ((await GitAsync(repo.Path, "merge-base", "--is-ancestor", commit, "HEAD")).ExitCode != 0) return null;
+        var r = await GitAsync(repo.Path, "rev-list", "--count", commit + "..HEAD");
+        return r.ExitCode == 0 && int.TryParse(r.Stdout.Trim(), out var n) ? n : null;
+    }
+
     public async Task<string> ShowAsync(RepoEntry repo, string commit)
     {
         if (commit.StartsWith('-')) throw new ArgumentException("Invalid commit.");

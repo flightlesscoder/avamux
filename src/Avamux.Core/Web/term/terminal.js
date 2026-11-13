@@ -32,13 +32,42 @@
       background: opts.background, foreground: opts.foreground, cursor: opts.cursor || opts.foreground,
       selectionBackground: opts.selection || '#4c566a', selectionInactiveBackground: opts.selection || '#3b4252'
     };
+    // The heartbeat cursor is our own element; xterm's is made invisible, and the character on a filled
+    // cursor is drawn in the background colour so it stays readable.
+    if (opts.pulse) { t.cursor = '#00000000'; t.cursorAccent = opts.pulseShape === 'block' ? opts.background : opts.foreground; }
     const ansi = Array.isArray(opts.ansi) && opts.ansi.length === 16 ? opts.ansi : defaultAnsi;
     ansiNames.forEach((n, i) => { t[n] = ansi[i]; });
     return t;
   }
 
+  // Places the heartbeat cursor over the cell xterm's cursor is in, or hides it when there is none to show.
+  function pulse(s) {
+    const p = s.pulse, term = s.term, buf = term.buffer.active;
+    s.el.classList.toggle('pulse-on', !!opts.pulse);
+    let hidden = false;
+    try { hidden = !!term._core.coreService.isCursorHidden; } catch { }
+    const row = buf.baseY + buf.cursorY - buf.viewportY;
+    const screen = s.el.querySelector('.xterm-screen');
+    if (!opts.pulse || hidden || !screen || row < 0 || row >= term.rows) { p.className = 'pulse-cursor'; return; }
+    if (p.parentNode !== screen) screen.insertBefore(p, screen.firstChild);
+    const w = screen.clientWidth / term.cols, h = screen.clientHeight / term.rows;
+    const shape = opts.pulseShape || 'block';
+    const focused = document.hasFocus() && document.activeElement === term.textarea;
+    p.className = 'pulse-cursor on ' + shape + (opts.pulseDouble ? ' double' : '') + (focused ? '' : ' idle');
+    p.style.left = Math.min(buf.cursorX, term.cols - 1) * w + 'px';
+    p.style.top = row * h + 'px';
+    p.style.width = (shape === 'bar' ? Math.max(2, Math.round(w / 5)) : w) + 'px';
+    p.style.height = h + 'px';
+    p.style.setProperty('--pc', opts.pulseColor || opts.cursor || opts.foreground);
+    p.style.setProperty('--pg', String((opts.pulseGlow == null ? 60 : opts.pulseGlow) / 100));
+    p.style.setProperty('--pd', (60 / (opts.pulseRate || 30)) + 's');
+  }
+
   function chrome() {
     document.body.style.background = opts.background;
+    document.body.classList.toggle('crt-on', !!opts.crt);
+    document.body.classList.toggle('crt-flicker', !!opts.crt && !!opts.crtFlicker);
+    document.documentElement.style.setProperty('--ci', String((opts.crtIntensity == null ? 50 : opts.crtIntensity) / 100));
     const r = document.documentElement.style;
     r.setProperty('--panel', opts.panel || '#1f2330');
     r.setProperty('--line', opts.line || '#3b4252');
@@ -123,7 +152,7 @@
     root.appendChild(el);
     const term = new Terminal({
       allowProposedApi: true, scrollback: opts.scrollback, fontFamily: fonts(), fontSize: opts.fontSize,
-      cursorBlink: opts.cursorBlink, theme: theme(), macOptionIsMeta: true, rightClickSelectsWord: false,
+      cursorBlink: opts.cursorBlink && !opts.pulse, theme: theme(), macOptionIsMeta: true, rightClickSelectsWord: false,
       allowTransparency: false, drawBoldTextInBrightColors: false, rescaleOverlappingGlyphs: true
     });
     const fit = new FitAddon.FitAddon();
@@ -134,8 +163,12 @@
     if (opts.renderer === 'webgl') {
       try { const gl = new WebglAddon.WebglAddon(); gl.onContextLoss(() => gl.dispose()); term.loadAddon(gl); } catch (e) { console.warn('webgl unavailable', e); }
     }
-    const s = { id, el, term, fit, ws: null, exited: false, gone: false };
+    const s = { id, el, term, fit, ws: null, exited: false, gone: false, pulse: document.createElement('div') };
     sessions.set(id, s);
+    term.onRender(() => pulse(s));
+    term.onScroll(() => pulse(s));
+    term.textarea.addEventListener('focus', () => pulse(s));
+    term.textarea.addEventListener('blur', () => pulse(s));
     try { fit.fit(); } catch { }
     term.onData(d => send(s, { t: 'i', d }));
     term.onBinary(d => send(s, { t: 'b', d: btoa(d) }));
@@ -206,9 +239,10 @@
       s.term.options.scrollback = opts.scrollback;
       s.term.options.fontFamily = fonts();
       s.term.options.fontSize = opts.fontSize;
-      s.term.options.cursorBlink = opts.cursorBlink;
+      s.term.options.cursorBlink = opts.cursorBlink && !opts.pulse;
       s.term.options.theme = theme();
       refit(s);
+      pulse(s);
     }
     return true;
   }
@@ -227,6 +261,8 @@
     });
   }
 
+  window.addEventListener('focus', () => { for (const s of sessions.values()) pulse(s); });
+  window.addEventListener('blur', () => { for (const s of sessions.values()) pulse(s); });
   chrome();
 
   window.avamux = {

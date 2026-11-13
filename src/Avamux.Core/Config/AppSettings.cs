@@ -26,6 +26,24 @@ public sealed class TerminalSettings
     public string Term { get; set; } = "xterm-256color";
     public bool CopyOnSelect { get; set; }
     public bool CursorBlink { get; set; } = true;
+    /// <summary>Replaces the blinking cursor with one that beats like a pulse and glows.</summary>
+    public bool CursorPulse { get; set; }
+    /// <summary>block, outline or bar.</summary>
+    public string CursorPulseShape { get; set; } = "block";
+    /// <summary>Empty follows the theme's accent.</summary>
+    public string CursorPulseColor { get; set; } = "";
+    /// <summary>Beat twice per cycle, like a heart, instead of once.</summary>
+    public bool CursorPulseDouble { get; set; }
+    /// <summary>Beats per minute.</summary>
+    public int CursorPulseRate { get; set; } = 30;
+    /// <summary>Strength of the glow, 0 to 100.</summary>
+    public int CursorPulseGlow { get; set; } = 60;
+    /// <summary>Old monitor look for the terminal view: scanlines, glowing text, darkened corners.</summary>
+    public bool Crt { get; set; }
+    /// <summary>Strength of the CRT effect, 0 to 100.</summary>
+    public int CrtIntensity { get; set; } = 50;
+    /// <summary>A faint flicker, like a tube that is not quite steady.</summary>
+    public bool CrtFlicker { get; set; }
     public bool CloseTabOnExit { get; set; } = true;
     /// <summary>Save the scrollback of a terminal to the Logs page when it ends.</summary>
     public bool PreserveDeadSessions { get; set; } = true;

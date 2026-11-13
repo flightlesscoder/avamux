@@ -149,6 +149,13 @@ public sealed class SearchService(AppServices app)
         app.Config.Describe().Where(v => Has(v.Path, q) || Has(v.Value?.ToString(), q))
             .Select(v => new SearchHit("settings", v.Path, JsonUtil.Line(v.Value), v.Path)).ToList();
 
+    /// <summary>Every setting whose name or value contains the text: the Settings source of the search, without the per-source cap.</summary>
+    public HashSet<string> MatchingSettings(string query)
+    {
+        var q = query.Trim();
+        return q.Length == 0 ? [] : Settings(q).Select(h => h.Target).ToHashSet(StringComparer.Ordinal);
+    }
+
     private async Task<List<SearchHit>> ReposAsync(string q, CancellationToken ct)
     {
         var hits = new List<SearchHit>();

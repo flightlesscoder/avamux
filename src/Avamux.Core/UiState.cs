@@ -17,6 +17,8 @@ public sealed class UiStateData
     public bool PullRequestsActiveOnly { get; set; } = true;
     /// <summary>Search sources that are switched off. Empty means everything is searched.</summary>
     public List<string> SearchExcluded { get; set; } = [];
+    /// <summary>Repository ids whose commits are folded away in the History tab.</summary>
+    public List<string> HistoryCollapsed { get; set; } = [];
     /// <summary>Most recently used last.</summary>
     public List<WikiPosition> WikiPositions { get; set; } = [];
 }

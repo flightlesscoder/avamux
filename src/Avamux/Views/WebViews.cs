@@ -29,6 +29,34 @@ public static class WebViews
         return false;
     }
 
+    /// <summary>
+    /// Gives a web view the keyboard focus for real. On Linux the page lives in its own X window inside ours, and
+    /// Avalonia's Focus() only moves GTK's focus within that window: X keeps the focus on our window, so the page
+    /// believes it is in the background (no caret, no blinking cursor) until it is clicked. Only done while our
+    /// window is the active one, so it never pulls focus away from another application.
+    /// </summary>
+    public static void FocusNative(NativeWebView web)
+    {
+        web.Focus();
+        if (!OperatingSystem.IsLinux() || TopLevel.GetTopLevel(web) is not Window { IsActive: true }) return;
+        try
+        {
+            if (web.TryGetPlatformHandle() is not { HandleDescriptor: "XID" } handle || handle.Handle == IntPtr.Zero) return;
+            if (s_display == IntPtr.Zero) s_display = XOpenDisplay(IntPtr.Zero);
+            if (s_display == IntPtr.Zero) return;
+            XSetInputFocus(s_display, handle.Handle, RevertToParent, CurrentTime);
+            XFlush(s_display);
+        }
+        catch (Exception ex) { Log.Warn("web", "Could not focus the web view: " + ex.Message); }
+    }
+
+    private static IntPtr s_display;
+    private const int RevertToParent = 2;
+    private static readonly IntPtr CurrentTime = IntPtr.Zero;
+    [DllImport("libX11.so.6")] private static extern IntPtr XOpenDisplay(IntPtr name);
+    [DllImport("libX11.so.6")] private static extern int XSetInputFocus(IntPtr display, IntPtr window, int revertTo, IntPtr time);
+    [DllImport("libX11.so.6")] private static extern int XFlush(IntPtr display);
+
     /// <summary>Opens the web inspector for a view. Returns false when it has to be opened by hand (right-click → Inspect Element).</summary>
     public static bool OpenDevTools(NativeWebView web)
     {
