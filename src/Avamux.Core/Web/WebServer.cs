@@ -96,6 +96,10 @@ public sealed class WebServer : IAsyncDisposable
         {
             ["scrollback"] = t.Scrollback, ["fontFamily"] = t.FontFamily, ["fontSize"] = t.FontSize, ["cursorBlink"] = t.CursorBlink,
             ["copyOnSelect"] = t.CopyOnSelect,
+            ["pulse"] = t.CursorPulse, ["pulseShape"] = t.CursorPulseShape is "outline" or "bar" ? t.CursorPulseShape : "block",
+            ["pulseColor"] = Theming.Rgb.TryParse(t.CursorPulseColor, out var pulse) ? pulse.Hex : theme["accent"],
+            ["crt"] = t.Crt, ["crtIntensity"] = Math.Clamp(t.CrtIntensity, 0, 100), ["crtFlicker"] = t.CrtFlicker,
+            ["pulseDouble"] = t.CursorPulseDouble, ["pulseRate"] = Math.Clamp(t.CursorPulseRate, 20, 240), ["pulseGlow"] = Math.Clamp(t.CursorPulseGlow, 0, 100),
             ["background"] = Theming.Rgb.TryParse(t.Background, out var bg) ? bg.Hex : theme["termBg"],
             ["foreground"] = Theming.Rgb.TryParse(t.Foreground, out var fg) ? fg.Hex : theme["termFg"],
             ["cursor"] = theme["accent"], ["selection"] = theme["termSel"], ["panel"] = theme["panel"], ["line"] = theme["lineStrong"], ["text"] = theme["text"], ["dim"] = theme["dim"],

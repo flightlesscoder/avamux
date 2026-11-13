@@ -23,7 +23,16 @@ public sealed class SettingsPage : UserControl, IPage
         ["terminal.shell"] = ("Shell", "Program started in new tabs. Empty uses $SHELL."),
         ["terminal.term"] = ("TERM", "Value of the TERM variable inside terminals."),
         ["terminal.copyOnSelect"] = ("Copy on select", "Copy text to the clipboard as soon as it is selected."),
-        ["terminal.cursorBlink"] = ("Blinking cursor", ""),
+        ["terminal.cursorBlink"] = ("Blinking cursor", "Not used while the heartbeat cursor is on."),
+        ["terminal.crt"] = ("CRT monitor effect", "Scanlines, softly glowing text and darkened corners over the terminal, like an old monitor."),
+        ["terminal.crtIntensity"] = ("CRT strength", "0 to 100. Lower is subtler and easier to read."),
+        ["terminal.crtFlicker"] = ("CRT flicker", "A faint, slow flicker of the screen."),
+        ["terminal.cursorPulse"] = ("Heartbeat cursor", "The cursor beats like a pulse with a soft neon glow instead of blinking."),
+        ["terminal.cursorPulseShape"] = ("Heartbeat cursor shape", "block is filled, outline is hollow, bar is a thin line."),
+        ["terminal.cursorPulseColor"] = ("Heartbeat cursor colour", "Empty follows the theme's accent."),
+        ["terminal.cursorPulseDouble"] = ("Double beat", "Pulse twice per beat, like a heart, instead of once."),
+        ["terminal.cursorPulseRate"] = ("Heartbeat rate", "Beats per minute, 20 to 240. The default is a slow 30."),
+        ["terminal.cursorPulseGlow"] = ("Heartbeat glow", "How strong the glow is, 0 to 100. 0 keeps the beat without the glow."),
         ["terminal.closeTabOnExit"] = ("Close tab on exit", "Remove a tab when its program ends."),
         ["terminal.preserveDeadSessions"] = ("Keep history of ended terminals", "Save a terminal's scrollback to Logs when it ends."),
         ["terminal.background"] = ("Background colour", "Empty follows the theme."),
@@ -83,9 +92,10 @@ public sealed class SettingsPage : UserControl, IPage
         ["theme.name"] = Themes.All.Select(t => t.Id).ToArray(),
         ["theme.windowChrome"] = ["auto", "system", "custom"],
         ["theme.soundSet"] = ["theme", .. SoundService.Sets],
+        ["terminal.cursorPulseShape"] = ["block", "outline", "bar"],
     };
 
-    private static bool IsColor(string key) => key is "theme.accent" or "terminal.background" or "terminal.foreground" || key.StartsWith("events.", StringComparison.Ordinal) && key.EndsWith("Color", StringComparison.Ordinal);
+    private static bool IsColor(string key) => key is "theme.accent" or "terminal.background" or "terminal.foreground" or "terminal.cursorPulseColor" || key.StartsWith("events.", StringComparison.Ordinal) && key.EndsWith("Color", StringComparison.Ordinal);
 
     private static readonly (string Key, string Title)[] Sections =
     [
@@ -101,6 +111,10 @@ public sealed class SettingsPage : UserControl, IPage
     private readonly Dictionary<string, Control> _rows = new();
     private readonly WrapPanel _themeTiles = new();
     private readonly ScrollViewer _scroll = new();
+    private readonly TextBox _find = new() { PlaceholderText = "Search settings…", FontSize = 14, Padding = new Thickness(12, 8) };
+    private readonly TextBlock _findStatus = new() { Foreground = Ui.Dim, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+    private readonly List<(Control Card, List<string> Keys)> _cards = [];
+    private readonly List<Control> _filterHidden = [];
     private bool _loading;
 
     private static ConfigService Config => App.Services.Config;
@@ -144,9 +158,17 @@ public sealed class SettingsPage : UserControl, IPage
             if (prefix == "theme") rows.Children.Add(_themeTiles);
             if (prefix == "ai") rows.Children.Add(Ui.Text("AI Chat and Workloads are placeholders for now. Switch them on to show them in the navigation.", "dim", 12.5));
             foreach (var v in all.Where(v => v.Path.StartsWith(prefix + ".", StringComparison.Ordinal))) rows.Children.Add(_rows[v.Path] = BuildRow(v));
-            if (prefix == "theme") rows.Children.Add(SoundTests());
-            if (rows.Children.Count > 1) body.Children.Add(Ui.Card(rows));
+            if (prefix == "theme") rows.Children.Add(Ui.Apply(SoundTests(), c => _filterHidden.Add(c)));
+            if (rows.Children.Count > 1)
+            {
+                var card = Ui.Card(rows);
+                body.Children.Add(card);
+                _cards.Add((card, all.Where(v => v.Path.StartsWith(prefix + ".", StringComparison.Ordinal)).Select(v => v.Path).ToList()));
+            }
         }
+        _filterHidden.Add(_themeTiles);
+        _find.TextChanged += (_, _) => _filterSoon();
+        _find.KeyDown += (_, e) => { if (e.Key == Key.Escape && _find.Text?.Length > 0) { e.Handled = true; _find.Text = ""; } };
 
         Content = new DockPanel
         {
@@ -154,19 +176,61 @@ public sealed class SettingsPage : UserControl, IPage
             {
                 Ui.Header("Settings", "Changes apply immediately unless noted.",
                     Ui.IconButton(Icons.Refresh, "Re-read the configuration files", () => Config.Reload(), "Reload")).Dock(Dock.Top),
+                new DockPanel { Margin = new Thickness(20, 0, 20, 10), Width = 860, HorizontalAlignment = HorizontalAlignment.Left, Children = { _findStatus.Dock(Dock.Right), Ui.Apply(_find, f => f.Margin = new Thickness(0, 0, 12, 0)) } }.Dock(Dock.Top),
                 Ui.Apply(_scroll, v => v.Content = body),
             },
         };
+        _filterSoon = Ui.Debounced(() => _ = ApplyFilterAsync(), 150);
         Config.Changed += Ui.Debounced(Refresh);
         Refresh();
     }
 
     public void OnShown() => Refresh();
 
+    private Action _filterSoon = () => { };
+    private int _filterRun;
+
+    /// <summary>
+    /// Narrows the page to the settings that match the search box. The matching is the Settings source of the main search
+    /// (name and value), plus the label and help text shown on this page.
+    /// </summary>
+    private async Task ApplyFilterAsync()
+    {
+        var query = (_find.Text ?? "").Trim();
+        var run = ++_filterRun;
+        HashSet<string>? hits = null;
+        if (query.Length > 0)
+        {
+            var found = await Task.Run(() => App.Services.Search.MatchingSettings(query));
+            if (run != _filterRun) return;
+            hits = found;
+            foreach (var (key, (label, help)) in Docs)
+                if (label.Contains(query, StringComparison.OrdinalIgnoreCase) || help.Contains(query, StringComparison.OrdinalIgnoreCase)) hits.Add(key);
+        }
+        var shown = 0;
+        foreach (var (card, keys) in _cards)
+        {
+            var any = false;
+            foreach (var key in keys)
+            {
+                if (!_rows.TryGetValue(key, out var row)) continue;
+                var on = hits is null || hits.Contains(key);
+                row.IsVisible = on;
+                if (on) { any = true; shown++; }
+            }
+            card.IsVisible = any;
+        }
+        foreach (var c in _filterHidden) c.IsVisible = hits is null;
+        _findStatus.Text = hits is null ? "" : shown == 0 ? "Nothing found" : $"{shown} setting{(shown == 1 ? "" : "s")}";
+        if (hits is not null) _scroll.Offset = default;
+    }
+
     /// <summary>Scrolls to a setting and marks it for a moment (used by Search).</summary>
     public void Reveal(string key)
     {
         if (!_rows.TryGetValue(key, out var row)) return;
+        // A filter left in the box would hide the very setting being revealed.
+        if (_find.Text?.Length > 0) { _find.Text = ""; _filterRun++; _ = ApplyFilterAsync(); }
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             row.BringIntoView();

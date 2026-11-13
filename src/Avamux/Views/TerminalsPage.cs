@@ -69,7 +69,6 @@ public sealed class TerminalWindow : AppWindow
         Page = new TerminalsPage(group);
         Body = Page;
         Page.Emptied += Close;
-        Activated += (_, _) => Page.OnShown();
     }
 
     public string Group { get; }
@@ -147,6 +146,11 @@ public sealed class TerminalsPage : UserControl, IPage
             Manager.Changed -= refresh; Manager.Closed -= closed; TerminalLayout.Changed -= refresh; App.Services.Config.Changed -= config; Ui.ThemeChanged -= config;
         };
 
+        // Coming back to the window (Alt+Tab, closing a dialog) hands the keyboard to the window, not to the
+        // terminal inside it, so pass it on whenever the terminals are what is showing.
+        AttachedToVisualTree += (_, _) => { if (TopLevel.GetTopLevel(this) is Window w) { w.Activated -= OnWindowActivated; w.Activated += OnWindowActivated; } };
+        DetachedFromVisualTree += (_, _) => { if (TopLevel.GetTopLevel(this) is Window w) w.Activated -= OnWindowActivated; };
+
         if (_group is null && Manager.Sessions.Count == 0) NewTerminal();
         RebuildTabs();
     }
@@ -157,9 +161,14 @@ public sealed class TerminalsPage : UserControl, IPage
 
     public void OnShown() => Dispatcher.UIThread.Post(FocusTerminal, DispatcherPriority.Background);
 
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        if (IsEffectivelyVisible && _editingId is null) OnShown();
+    }
+
     private void FocusTerminal()
     {
-        _web.Focus();
+        WebViews.FocusNative(_web);
         if (_ready) _ = Js("avamux.focus()");
     }
 
@@ -200,6 +209,8 @@ public sealed class TerminalsPage : UserControl, IPage
             await SyncViewAsync();
             if (SelectedId is not null) await Js($"avamux.show({Q(SelectedId)})");
             Log.Info("terminal", _group is null ? "Terminal view ready" : $"Terminal window {_group} ready");
+            // The page was asked for focus before it existed (app start, a new window); give it now.
+            if (IsEffectivelyVisible && _editingId is null) FocusTerminal();
         }
         finally { _starting = false; }
     }
@@ -262,7 +273,7 @@ public sealed class TerminalsPage : UserControl, IPage
         SelectedId = s.Id;
         RebuildTabs();
         if (_ready) _ = ShowAsync(s.Id);
-        if (IsVisible) _web.Focus();
+        if (IsVisible) WebViews.FocusNative(_web);
     }
 
     private async Task ShowAsync(string id)

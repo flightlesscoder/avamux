@@ -458,6 +458,38 @@ public class DiffTests
     }
 
     [Fact]
+    public async Task Commit_count_and_position_in_history()
+    {
+        using var box = new Sandbox();
+        using var config = new ConfigService(box.Paths);
+        var dir = Path.Combine(box.Root, "repo");
+        Directory.CreateDirectory(dir);
+        async Task<string> Git(params string[] args) { var r = await Shell.RunAsync("git", args, dir); Assert.True(r.ExitCode == 0, r.Stderr); return r.Stdout.Trim(); }
+        await Git("init", "-q", "-b", "main");
+        await Git("config", "user.email", "t@example.com"); await Git("config", "user.name", "T"); await Git("config", "commit.gpgsign", "false");
+        var repos = new RepoService(box.Paths, config);
+        var repo = await repos.AddAsync(dir);
+        Assert.Null(await repos.CommitCountAsync(repo));   // no commits yet
+
+        var hashes = new List<string>();
+        for (var i = 0; i < 5; i++)
+        {
+            await Git("commit", "-q", "--allow-empty", "-m", $"c{i}");
+            hashes.Add(await Git("rev-parse", "HEAD"));
+        }
+        Assert.Equal(5, await repos.CommitCountAsync(repo));
+        Assert.Equal(0, await repos.CommitPositionAsync(repo, hashes[4]));       // newest
+        Assert.Equal(4, await repos.CommitPositionAsync(repo, hashes[0][..7]));  // oldest, by short hash
+
+        // A commit only on another branch has no place in the current history.
+        await Git("checkout", "-q", "-b", "side");
+        await Git("commit", "-q", "--allow-empty", "-m", "side");
+        var side = await Git("rev-parse", "HEAD");
+        await Git("checkout", "-q", "main");
+        Assert.Null(await repos.CommitPositionAsync(repo, side));
+    }
+
+    [Fact]
     public async Task Branches_commits_and_remotes()
     {
         using var box = new Sandbox();

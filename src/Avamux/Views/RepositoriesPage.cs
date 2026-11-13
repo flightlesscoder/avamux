@@ -30,6 +30,8 @@ public sealed class RepositoriesPage : UserControl, IPage
     {
         /// <summary>True while this row belongs to the change the user jumped to, so it is drawn highlighted.</summary>
         public bool Current { get; set; }
+        /// <summary>Which sides of the highlight box this row draws: the first and last rows of a change close it off.</summary>
+        public Thickness Edges { get; set; }
     }
     private sealed record RepoChoice(string? Id, string Label);
     private sealed record BranchChoice(RepoBranch? Branch, string Label);
@@ -69,6 +71,11 @@ public sealed class RepositoriesPage : UserControl, IPage
     private PrRef? _pr;
     private (string RepoId, string Path, int Line)? _file;   // a plain file shown from Search
     private object? _lastSelected;
+    // How many commits each History section shows once "Show more" was used; keyed by repository and by whether
+    // all repositories are shown, as the two views start from different page sizes.
+    private readonly Dictionary<(string RepoId, bool All), int> _historyLimit = [];
+    // A commit (full hash) that History should unfold, load and select the next time it is built.
+    private (string RepoId, string Hash)? _revealCommit;
     private string _diffText = "";
     private string? _openLink;
     private DiffDoc? _doc;               // the diff on screen, when hunks and lines of it can be staged
@@ -267,7 +274,7 @@ public sealed class RepositoriesPage : UserControl, IPage
 
     private void ClearSelection()
     {
-        _change = null; _commit = null; _view = null; _viewFile = null; _branch = null; _pr = null; _file = null; _lastSelected = null;
+        _change = null; _commit = null; _view = null; _viewFile = null; _branch = null; _pr = null; _file = null; _lastSelected = null; _revealCommit = null;
     }
 
     private void Select(object? tag)
@@ -327,16 +334,23 @@ public sealed class RepositoriesPage : UserControl, IPage
         };
     }
 
-    private ListBoxItem HeaderRow(RepoEntry repo, string detail, string? error, ContextMenu? menu)
+    /// <param name="collapsed">When set, the header shows a fold arrow and a click on it calls <paramref name="toggle"/>.</param>
+    private ListBoxItem HeaderRow(RepoEntry repo, string detail, string? error, ContextMenu? menu, bool? collapsed = null, Action? toggle = null)
     {
+        var title = Ui.Row(8, new TextBlock { Text = repo.Name, FontWeight = FontWeight.SemiBold }, new TextBlock { Text = detail, Foreground = Ui.Dim, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+        if (collapsed is { } folded)
+            title.Children.Insert(0, new TextBlock { Text = folded ? "▶" : "▼", Width = 14, FontSize = 10, Foreground = Ui.Dim, VerticalAlignment = VerticalAlignment.Center });
         var content = new Border
         {
             Background = Brushes.Transparent, Padding = new Thickness(8, 9, 8, 3),
+            Cursor = toggle is null ? null : new Cursor(StandardCursorType.Hand),
             Child = Ui.Column(1,
-                Ui.Row(8, new TextBlock { Text = repo.Name, FontWeight = FontWeight.SemiBold }, new TextBlock { Text = detail, Foreground = Ui.Dim, FontSize = 12, VerticalAlignment = VerticalAlignment.Center }),
+                title,
                 Ui.Apply(new TextBlock { Text = error ?? "", Foreground = Ui.Tk("error"), FontSize = 12, TextWrapping = TextWrapping.Wrap }, t => t.IsVisible = error is not null)),
         };
-        ToolTip.SetTip(content, repo.Path + "\nRight-click for branch, folder, remote and more");
+        if (toggle is not null)
+            content.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) { e.Handled = true; toggle(); } };
+        ToolTip.SetTip(content, repo.Path + (toggle is null ? "" : collapsed == true ? "\nClick to show its commits" : "\nClick to fold its commits away") + "\nRight-click for branch, folder, remote and more");
         return new ListBoxItem { Tag = new HeaderRef(repo), Padding = new Thickness(0), Focusable = false, Content = content, ContextMenu = menu ?? RepoMenu(repo) };
     }
 
@@ -418,6 +432,8 @@ public sealed class RepositoriesPage : UserControl, IPage
             default: BuildPullRequests(rows, shown); break;
         }
         if (gen != _generation) return;
+        var revealed = _view is null && _tab == Tab.History && _revealCommit is not null;
+        if (revealed) _revealCommit = null;
 
         // Keep showing what was selected if it still exists; otherwise pick the first entry. The row is marked
         // before it goes into the list: selecting an item that was only just added does not highlight it.
@@ -432,6 +448,7 @@ public sealed class RepositoriesPage : UserControl, IPage
             else Select(selected.Tag);
         }
         finally { _building = false; }
+        if (revealed && selected is not null) Dispatcher.UIThread.Post(() => _list.ScrollIntoView(selected), DispatcherPriority.Loaded);
         await ShowAsync();
     }
 
@@ -526,21 +543,80 @@ public sealed class RepositoriesPage : UserControl, IPage
         return item;
     }
 
+    /// <summary>How many commits a page of history holds: fewer per repository when every repository is shown.</summary>
+    private int HistoryPage => _repoId is null ? 15 : Math.Max(1, App.Services.Config.Settings.Repositories.LogCount);
+
+    private void ToggleHistory(string repoId)
+    {
+        var folded = State.Data.HistoryCollapsed;
+        if (!folded.Remove(repoId)) folded.Add(repoId);
+        State.SaveSoon();
+        _ = RefreshAsync();
+    }
+
+    /// <summary>
+    /// Each repository is a foldable section that starts with one page of its newest commits; "Show more" at the end
+    /// of a section adds another page. Folded sections do not run git log at all.
+    /// </summary>
     private async Task BuildHistoryAsync(List<ListBoxItem> rows, List<RepoEntry> shown)
     {
-        foreach (var repo in shown)
+        var page = HistoryPage;
+        string? notOnBranch = null;
+        if (_revealCommit is { } reveal && shown.FirstOrDefault(r => r.Id == reveal.RepoId) is { } target)
         {
-            var commits = await Repos.LogAsync(repo, _repoId is null ? 15 : null);
-            rows.Add(HeaderRow(repo, commits.Count == 0 ? "no commits" : $"{commits.Count} recent commit(s)", null, null));
+            // A commit to land on (from Search, or coming back from looking into it): unfold its repository and
+            // load whole pages until it is included.
+            if (State.Data.HistoryCollapsed.Remove(target.Id)) State.SaveSoon();
+            if (await Repos.CommitPositionAsync(target, reveal.Hash) is { } position)
+            {
+                var key = (target.Id, _repoId is null);
+                var needed = (position / page + 1) * page;
+                if (!_historyLimit.TryGetValue(key, out var have) || have < needed) _historyLimit[key] = Math.Max(needed, page);
+            }
+            else notOnBranch = target.Id;
+        }
+        var folded = State.Data.HistoryCollapsed.ToHashSet();
+        var loaded = await Task.WhenAll(shown.Select(async repo =>
+        {
+            var limit = _historyLimit.TryGetValue((repo.Id, _repoId is null), out var l) ? l : page;
+            var count = Repos.CommitCountAsync(repo);
+            var log = folded.Contains(repo.Id) ? Task.FromResult<IReadOnlyList<RepoCommit>>([]) : Repos.LogAsync(repo, limit);
+            return (repo, total: await count, commits: await log);
+        }));
+        foreach (var (repo, total, commits) in loaded)
+        {
+            var collapsed = folded.Contains(repo.Id);
+            var detail = total is not { } t || t == 0 ? "no commits"
+                : collapsed || commits.Count >= t ? $"{t:N0} commit{(t == 1 ? "" : "s")}"
+                : $"newest {commits.Count:N0} of {t:N0}";
+            rows.Add(HeaderRow(repo, detail, null, null, collapsed, () => ToggleHistory(repo.Id)));
+            if (collapsed) continue;
+            if (notOnBranch == repo.Id) rows.Add(Note($"Commit {_revealCommit!.Value.Hash[..Math.Min(10, _revealCommit.Value.Hash.Length)]} is not on the current branch of {repo.Name}, so it is not in this list. The Branches tab shows the commits of other branches."));
+            var revealHere = _revealCommit is { } rc && rc.RepoId == repo.Id ? rc.Hash : null;
             foreach (var c in commits)
             {
+                var selected = revealHere is not null
+                    ? revealHere.StartsWith(c.Hash, StringComparison.OrdinalIgnoreCase)
+                    : _commit is not null && _commit.RepoId == repo.Id && _commit.Commit.Hash == c.Hash;
                 rows.Add(new ListBoxItem
                 {
-                    Tag = new CommitRef(repo.Id, c), IsSelected = _commit is not null && _commit.RepoId == repo.Id && _commit.Commit.Hash == c.Hash, Padding = new Thickness(12, 5, 8, 5),
+                    Tag = new CommitRef(repo.Id, c), IsSelected = selected, Padding = new Thickness(12, 5, 8, 5),
                     Content = Ui.Column(1,
                         new TextBlock { Text = c.Subject, FontSize = 12.5, TextTrimming = TextTrimming.CharacterEllipsis },
                         Ui.Text($"{c.Hash} · {c.Author} · {c.Date}", "dim", 11)),
                     ContextMenu = CommitMenu(repo, c),
+                });
+            }
+            if (total is { } all && commits.Count < all)
+            {
+                var more = Math.Min(page, all - commits.Count);
+                var key = (repo.Id, _repoId is null);
+                var shownNow = commits.Count;
+                rows.Add(new ListBoxItem
+                {
+                    Focusable = false, Padding = new Thickness(12, 2, 8, 8), Background = Brushes.Transparent,
+                    Content = Ui.TextButton($"Show {more:N0} more", () => { _historyLimit[key] = shownNow + more; _ = RefreshAsync(); },
+                        $"Load the next {more:N0} commits of {repo.Name} ({all - shownNow:N0} not shown yet)"),
                 });
             }
         }
@@ -961,7 +1037,9 @@ public sealed class RepositoriesPage : UserControl, IPage
     {
         for (var i = span.Start; i <= span.End; i++)
         {
+            // One box around the whole group: every row has the side edges, only the first and last close it off.
             _shownRows[i].Current = current;
+            _shownRows[i].Edges = current ? new Thickness(1, i == span.Start ? 1 : 0, 1, i == span.End ? 1 : 0) : default;
             if (_diff.ContainerFromIndex(i) is { } container
                 && container.GetVisualDescendants().OfType<Border>().FirstOrDefault(b => b.Tag as string == "frame") is { } frame)
                 StyleFrame(frame, _shownRows[i]);
@@ -988,7 +1066,10 @@ public sealed class RepositoriesPage : UserControl, IPage
 
     private static Control BuildRow(Row r)
     {
-        var frame = new Border { Background = RowBackground(r), Tag = "frame", Child = BuildRowContent(r) };
+        // The highlight box is a border laid over the row rather than around it: it takes up no room, so nothing
+        // moves when a change is selected, and the row's own content (such as the change bar) cannot cover it.
+        var box = new Border { IsHitTestVisible = false, BorderBrush = Ui.Tk("accent") };
+        var frame = new Border { Tag = "frame", Child = new Panel { Children = { BuildRowContent(r), box } } };
         StyleFrame(frame, r);
         return frame;
     }
@@ -1002,13 +1083,19 @@ public sealed class RepositoriesPage : UserControl, IPage
         _ => Brushes.Transparent,
     };
 
-    /// <summary>The current change is a darker tint of the row's own colour, with a thin border in the theme's accent.</summary>
+    /// <summary>
+    /// The current change is a darker tint of the row's own colour inside one thin box in the theme's accent: each
+    /// row draws the box's sides, and only the first and last rows of the change draw its top and bottom.
+    /// </summary>
     private static void StyleFrame(Border frame, Row r)
     {
         var bg = RowBackground(r);
         frame.Background = r.Current && bg is SolidColorBrush sb ? new SolidColorBrush(Darker(sb.Color)) : bg;
-        frame.BorderBrush = Ui.Tk("accent");
-        frame.BorderThickness = new Thickness(r.Current ? 1 : 0);
+        if (frame.Child is Panel { Children: [_, Border box] })
+        {
+            box.BorderBrush = Ui.Tk("accent");
+            box.BorderThickness = r.Current ? r.Edges : default;
+        }
     }
 
     private static Avalonia.Media.Color Darker(Avalonia.Media.Color c) =>
@@ -1121,6 +1208,8 @@ public sealed class RepositoriesPage : UserControl, IPage
             var info = await Repos.CommitInfoAsync(repo, hash) ?? throw new InvalidOperationException($"Commit {hash} was not found in {repo.Name}.");
             var files = await Repos.CommitFilesAsync(repo, info.Hash);
             _view = new CommitView(repo, info, files);
+            // Coming back to History should land on this commit, wherever it is in the list.
+            if (_tab == Tab.History) _revealCommit = (repo.Id, info.Hash);
             _viewFile = files.Count > 0 ? new CommitFileRef(repo.Id, info.Hash, files[0]) : null;
             _lastSelected = null;
             await RefreshAsync();
