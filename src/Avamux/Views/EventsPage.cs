@@ -117,6 +117,10 @@ public sealed class EventsPage : UserControl, IPage
         BuildSide();
     }
 
+    /// <summary>Weekend days: the cell colour nudged toward the theme's deep background, so it fits every theme.</summary>
+    private static IBrush WeekendBrush() =>
+        Ui.Raw(Rgb.Parse(Ui.Theme["cell"]).Mix(Rgb.Parse(Ui.Theme["bgDeep"]), 0.3).Hex);
+
     private void BuildCalendar()
     {
         _monthLabel.Text = _month.ToString("MMMM yyyy");
@@ -133,6 +137,7 @@ public sealed class EventsPage : UserControl, IPage
             var todays = agenda.Where(a => a.Occurrence.Start <= dayEnd && a.Occurrence.EffectiveEnd >= day)
                 .GroupBy(a => a.Item.Id).Select(g => (g.First().Item, First: g.First().Occurrence, Count: g.Count())).ToList();
             var inMonth = day.Month == _month.Month;
+            var weekend = day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
             var cell = new StackPanel { Spacing = 2 };
             var number = new TextBlock { Text = day.Day.ToString(), FontSize = 12, Foreground = day == DateTime.Today ? Ui.OnAccent : inMonth ? Ui.Tk("textSoft") : Ui.Tk("ghost"), FontWeight = day == DateTime.Today ? FontWeight.Bold : FontWeight.Normal };
             cell.Children.Add(day == DateTime.Today
@@ -160,7 +165,7 @@ public sealed class EventsPage : UserControl, IPage
             if (todays.Count > 3) cell.Children.Add(new TextBlock { Text = $"+{todays.Count - 3} more", FontSize = 10.5, Foreground = Ui.Dim });
             var border = new Border
             {
-                Background = day == _selectedDay ? Ui.Tk("cellSel") : inMonth ? Ui.Tk("cell") : Brushes.Transparent,
+                Background = day == _selectedDay ? Ui.Tk("cellSel") : inMonth ? (weekend ? WeekendBrush() : Ui.Tk("cell")) : Brushes.Transparent,
                 BorderBrush = day == _selectedDay ? Ui.Tk("accent") : Ui.Line, BorderThickness = new Thickness(1), CornerRadius = Ui.R(4),
                 Margin = new Thickness(2), Padding = new Thickness(5, 3), Child = cell, ClipToBounds = true, MinHeight = 56,
             };

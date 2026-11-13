@@ -44,7 +44,7 @@ public sealed class SettingsPage : UserControl, IPage
         ["theme.accent"] = ("Accent colour", "Empty uses the theme's own accent."),
         ["theme.windowChrome"] = ("Window chrome", "auto lets the theme decide; system uses the desktop's title bar; custom draws a title bar in the theme's colours."),
         ["theme.sounds"] = ("Sounds", "Play a sound when something happens."),
-        ["theme.soundVolume"] = ("Sound volume", "0 to 100."),
+        ["theme.soundVolume"] = ("Sound volume", "How loud every theme sound plays, including the previews below. 0 is silent."),
         ["theme.soundSet"] = ("Sound set", "theme uses the sounds that belong to the theme."),
         ["theme.soundOnEvent"] = ("Sound: event starts or ends", ""),
         ["theme.soundOnTimer"] = ("Sound: timer ends", ""),
@@ -267,6 +267,33 @@ public sealed class SettingsPage : UserControl, IPage
             combo.SelectionChanged += (_, _) => { if (!_loading && combo.SelectedItem is string s) Commit(key, s); };
             editor = combo;
             show = v => combo.SelectedItem = options.FirstOrDefault(o => string.Equals(o, v?.ToString(), StringComparison.OrdinalIgnoreCase));
+        }
+        else if (key == "theme.soundVolume")
+        {
+            // A slider that saves once the user pauses, so a drag does not rewrite the config file on every tick.
+            var slider = new Slider { Minimum = 0, Maximum = 100, TickFrequency = 5, IsSnapToTickEnabled = true, Width = 260, VerticalAlignment = VerticalAlignment.Center };
+            var readout = new TextBlock { Width = 44, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center, FontSize = 12 };
+            var pending = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            pending.Tick += (_, _) =>
+            {
+                pending.Stop();
+                Commit(key, ((int)Math.Round(slider.Value)).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            };
+            slider.ValueChanged += (_, e) =>
+            {
+                readout.Text = $"{Math.Round(e.NewValue)}%";
+                if (_loading) return;
+                pending.Stop();
+                pending.Start();
+            };
+            editor = Ui.Row(10, slider, readout);
+            show = v =>
+            {
+                var volume = v is JsonValue jv && jv.TryGetValue<int>(out var n) ? n : 70;
+                readout.Text = $"{volume}%";
+                // Do not pull the slider back while a save from a drag is still on its way.
+                if (!pending.IsEnabled) slider.Value = Math.Clamp(volume, 0, 100);
+            };
         }
         else
         {

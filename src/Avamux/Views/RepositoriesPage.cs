@@ -26,7 +26,11 @@ public sealed class RepositoriesPage : UserControl, IPage
     private enum RowKind { Meta, FileHeader, Hunk, Context, Add, Del, Note, Code, Log, Info }
 
     /// <summary>One line of the right-hand pane.</summary>
-    private sealed record Row(RowKind Kind, string Text, int? Old = null, int? New = null, DiffLine? Diff = null, IReadOnlyList<Core.Text.Span>? Spans = null, bool Marked = false, RepoCommit? Commit = null);
+    private sealed record Row(RowKind Kind, string Text, int? Old = null, int? New = null, DiffLine? Diff = null, IReadOnlyList<Core.Text.Span>? Spans = null, bool Marked = false, RepoCommit? Commit = null)
+    {
+        /// <summary>True while this row belongs to the change the user jumped to, so it is drawn highlighted.</summary>
+        public bool Current { get; set; }
+    }
     private sealed record RepoChoice(string? Id, string Label);
     private sealed record BranchChoice(RepoBranch? Branch, string Label);
     /// <summary>A changed file as listed on the left: the same file can appear under Staged and under Changes.</summary>
@@ -44,7 +48,9 @@ public sealed class RepositoriesPage : UserControl, IPage
     private readonly ListBox _diff = new() { Classes = { "rows" } };
     private readonly TextBlock _diffTitle = new() { FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, FontFamily = Ui.Mono, FontSize = 12.5 };
     private readonly TextBlock _diffSub = new() { Foreground = Ui.Dim, FontSize = 11.5, TextTrimming = TextTrimming.CharacterEllipsis, IsVisible = false };
-    private readonly Button _stage, _edit, _remove, _diffMode, _fileModeButton, _open, _commitButton;
+    private readonly Button _stage, _edit, _remove, _diffMode, _fileModeButton, _open, _commitButton, _changeUp, _changeDown;
+    private readonly TextBlock _changeCount = new() { Foreground = Ui.Dim, FontSize = 12, VerticalAlignment = VerticalAlignment.Center, MinWidth = 60, TextAlignment = TextAlignment.Center };
+    private readonly StackPanel _changeNav;
     private readonly Button[] _tabs;
     private readonly CheckBox _mine = new() { Content = "Only mine", FontSize = 12.5 }, _active = new() { Content = "Only active", FontSize = 12.5 };
     private readonly Border _prBar;
@@ -69,6 +75,9 @@ public sealed class RepositoriesPage : UserControl, IPage
     private RepoEntry? _docRepo;
     private bool _docStaged;
     private int _generation;
+    private List<(int Start, int End)> _changeSpans = [];   // first and last row index of each group of changed lines
+    private List<Row> _shownRows = [];                      // the rows in the list, indexed the same way
+    private int _changeIndex = -1;                          // the group last jumped to, -1 before the first jump
 
     private static RepoService Repos => App.Services.Repos;
     private static WatchService Watches => App.Services.Watches;
@@ -123,6 +132,11 @@ public sealed class RepositoriesPage : UserControl, IPage
         _open = Ui.IconButton(Icons.OpenInNew, "Open in the browser", () => { if (_openLink is { } l) Shell.Open(l); }, "Open");
         _diffMode = Ui.TextButton("Diff", () => { _fileMode = false; _ = ShowAsync(); }, "Show what changed");
         _fileModeButton = Ui.TextButton("File", () => { _fileMode = true; _ = ShowAsync(); }, "Show the whole file with syntax highlighting and line numbers");
+        _changeUp = Ui.TextButton("↑", () => JumpChange(-1), "Previous change (wraps around to the last one)");
+        _changeDown = Ui.TextButton("↓", () => JumpChange(1), "Next change (wraps around to the first one)");
+        _changeUp.IsEnabled = _changeDown.IsEnabled = false;
+        _changeNav = Ui.Row(2, _changeUp, _changeDown, _changeCount);
+        _changeNav.IsVisible = false;
         _remove = Ui.IconButton(Icons.Delete, "Remove the selected repository from the list (files are not touched)", () => _ = RemoveAsync());
         _commitButton = Ui.IconButton(Icons.Check, "Commit what is staged", () => _ = CommitAsync(CurrentRepo), "Commit");
         _tabs = new[] { "Changes", "History", "Branches", "Pull Requests" }.Select((label, i) =>
@@ -182,7 +196,7 @@ public sealed class RepositoriesPage : UserControl, IPage
                     {
                         Children =
                         {
-                            Ui.Row(4, Ui.Row(0, _diffMode, _fileModeButton), _stage, _edit, _open,
+                            Ui.Row(4, Ui.Row(0, _diffMode, _fileModeButton), _changeNav, _stage, _edit, _open,
                                 Ui.IconButton(Icons.Console, "Open a terminal in this repository", OpenTerminal, "Terminal"),
                                 Ui.TextButton("Copy", () => _ = App.Services.Host.SetClipboardAsync(_diffText), "Copy what is shown to the clipboard")).Dock(Dock.Right),
                             new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { _diffTitle, _diffSub } },
@@ -801,6 +815,7 @@ public sealed class RepositoriesPage : UserControl, IPage
     {
         _stage.IsVisible = stage; _edit.IsVisible = edit; _open.IsVisible = open;
         _diffMode.IsVisible = _fileModeButton.IsVisible = modes;
+        _changeNav.IsVisible = modes;
         _diffMode.Opacity = _fileMode ? 0.55 : 1;
         _fileModeButton.Opacity = _fileMode ? 1 : 0.55;
     }
@@ -897,8 +912,64 @@ public sealed class RepositoriesPage : UserControl, IPage
         const int max = 20000;
         if (rows.Count > max) { var more = rows.Count - max; rows = rows.Take(max).ToList(); rows.Add(new Row(RowKind.Info, $"… {more} more lines not shown …")); }
         _diff.ItemsSource = rows;
+        ResetChangeNav(rows);
         if (_file is { Line: > 0 } target && rows.Count >= target.Line) Dispatcher.UIThread.Post(() => { _diff.SelectedIndex = target.Line - 1; _diff.ScrollIntoView(target.Line - 1); }, DispatcherPriority.Background);
     }
+
+    /// <summary>
+    /// Works out the groups of changed lines in what is shown: in a diff, each run of added or removed lines; in the
+    /// file view, each run of lines marked as changed. Only a file or diff of the Changes tab has groups to jump between.
+    /// </summary>
+    private void ResetChangeNav(List<Row> rows)
+    {
+        _shownRows = rows;
+        _changeSpans = [];
+        if (_diffMode.IsVisible)
+        {
+            bool Changed(Row r) => _fileMode ? r.Kind == RowKind.Code && r.Marked : r.Kind is RowKind.Add or RowKind.Del;
+            for (var i = 0; i < rows.Count; i++)
+            {
+                if (!Changed(rows[i])) continue;
+                var end = i;
+                while (end + 1 < rows.Count && Changed(rows[end + 1])) end++;
+                _changeSpans.Add((i, end));
+                i = end;
+            }
+        }
+        _changeIndex = -1;
+        _changeUp.IsEnabled = _changeDown.IsEnabled = _changeSpans.Count > 0;
+        UpdateChangeLabel();
+    }
+
+    /// <summary>Moves to the next (step 1) or previous (step -1) group of changes, wrapping around at either end.</summary>
+    private void JumpChange(int step)
+    {
+        var n = _changeSpans.Count;
+        if (n == 0) return;
+        var previous = _changeIndex;
+        _changeIndex = _changeIndex < 0 ? (step > 0 ? 0 : n - 1) : ((_changeIndex + step) % n + n) % n;
+        if (previous >= 0) MarkCurrent(_changeSpans[previous], false);
+        MarkCurrent(_changeSpans[_changeIndex], true);
+        var start = _changeSpans[_changeIndex].Start;
+        _diff.SelectedIndex = start;
+        _diff.ScrollIntoView(start);
+        UpdateChangeLabel();
+    }
+
+    /// <summary>Flags the rows of a change as current (or not) and repaints the ones on screen.</summary>
+    private void MarkCurrent((int Start, int End) span, bool current)
+    {
+        for (var i = span.Start; i <= span.End; i++)
+        {
+            _shownRows[i].Current = current;
+            if (_diff.ContainerFromIndex(i) is { } container
+                && container.GetVisualDescendants().OfType<Border>().FirstOrDefault(b => b.Tag as string == "frame") is { } frame)
+                StyleFrame(frame, _shownRows[i]);
+        }
+    }
+
+    private void UpdateChangeLabel() =>
+        _changeCount.Text = _changeSpans.Count == 0 ? "No changes" : $"{_changeIndex + 1} of {_changeSpans.Count}";
 
     private static List<Row> DiffRows(DiffDoc doc) => doc.Lines.Select(l => new Row(l.Kind switch
     {
@@ -917,6 +988,34 @@ public sealed class RepositoriesPage : UserControl, IPage
 
     private static Control BuildRow(Row r)
     {
+        var frame = new Border { Background = RowBackground(r), Tag = "frame", Child = BuildRowContent(r) };
+        StyleFrame(frame, r);
+        return frame;
+    }
+
+    private static IBrush RowBackground(Row r) => r.Kind switch
+    {
+        RowKind.Add => Ui.Tk("addBg"),
+        RowKind.Del => Ui.Tk("delBg"),
+        RowKind.Hunk => Ui.Tk("hunkBg"),
+        RowKind.Code when r.Marked => Ui.Tk("addBg"),
+        _ => Brushes.Transparent,
+    };
+
+    /// <summary>The current change is a darker tint of the row's own colour, with a thin border in the theme's accent.</summary>
+    private static void StyleFrame(Border frame, Row r)
+    {
+        var bg = RowBackground(r);
+        frame.Background = r.Current && bg is SolidColorBrush sb ? new SolidColorBrush(Darker(sb.Color)) : bg;
+        frame.BorderBrush = Ui.Tk("accent");
+        frame.BorderThickness = new Thickness(r.Current ? 1 : 0);
+    }
+
+    private static Avalonia.Media.Color Darker(Avalonia.Media.Color c) =>
+        Avalonia.Media.Color.FromArgb(c.A, (byte)(c.R * 0.84), (byte)(c.G * 0.84), (byte)(c.B * 0.84));
+
+    private static Control BuildRowContent(Row r)
+    {
         if (r.Kind == RowKind.Log && r.Commit is { } c)
         {
             return new StackPanel
@@ -932,20 +1031,20 @@ public sealed class RepositoriesPage : UserControl, IPage
             };
         }
         var numbered = r.Kind is RowKind.Context or RowKind.Add or RowKind.Del or RowKind.Hunk or RowKind.Note or RowKind.Code;
-        var (fg, bg, bar) = r.Kind switch
+        var (fg, bar) = r.Kind switch
         {
-            RowKind.Add => (Ui.Tk("okHi"), Ui.Tk("addBg"), Ui.Tk("ok")),
-            RowKind.Del => (Ui.Tk("errorText"), Ui.Tk("delBg"), Ui.Tk("error")),
-            RowKind.Hunk => (Ui.Tk("link"), Ui.Tk("hunkBg"), Ui.Tk("accent")),
-            RowKind.FileHeader or RowKind.Note => (Ui.Tk("dim"), (IBrush)Brushes.Transparent, (IBrush)Brushes.Transparent),
-            RowKind.Meta => (r.Text.StartsWith("commit ", StringComparison.Ordinal) ? Ui.Tk("warn") : Ui.Tk("textCode"), Brushes.Transparent, Brushes.Transparent),
-            RowKind.Code => (Ui.Tk("textCode"), r.Marked ? Ui.Tk("addBg") : Brushes.Transparent, r.Marked ? Ui.Tk("ok") : Brushes.Transparent),
-            _ => (Ui.Tk("textCode"), Brushes.Transparent, Brushes.Transparent),
+            RowKind.Add => (Ui.Tk("okHi"), Ui.Tk("ok")),
+            RowKind.Del => (Ui.Tk("errorText"), Ui.Tk("error")),
+            RowKind.Hunk => (Ui.Tk("link"), Ui.Tk("accent")),
+            RowKind.FileHeader or RowKind.Note => (Ui.Tk("dim"), (IBrush)Brushes.Transparent),
+            RowKind.Meta => (r.Text.StartsWith("commit ", StringComparison.Ordinal) ? Ui.Tk("warn") : Ui.Tk("textCode"), (IBrush)Brushes.Transparent),
+            RowKind.Code => (Ui.Tk("textCode"), r.Marked ? Ui.Tk("ok") : Brushes.Transparent),
+            _ => (Ui.Tk("textCode"), Brushes.Transparent),
         };
         var text = new TextBlock { FontFamily = Ui.Mono, FontSize = 12.5, Foreground = fg, Padding = new Thickness(10, 0, 12, 0), Tag = "text" };
         if (r.Spans is not null) { MarkdownView.Fill(text.Inlines!, r.Spans); if (r.Spans.Count == 0) text.Text = " "; }
         else text.Text = (r.Kind switch { RowKind.Add => "+", RowKind.Del => "-", RowKind.Context => " ", _ => "" }) + (r.Text.Length > 0 || r.Kind is RowKind.Add or RowKind.Del or RowKind.Context ? r.Text : " ");
-        if (!numbered) return new Border { Background = bg, Child = text };
+        if (!numbered) return new Border { Child = text };
 
         TextBlock Number(int? n) => new()
         {
@@ -954,7 +1053,7 @@ public sealed class RepositoriesPage : UserControl, IPage
         };
         // The coloured strip on the left is the hunk's handle; the numbers are each line's.
         var strip = new Border { Width = 10, Background = bar, Tag = "strip" };
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions(r.Kind == RowKind.Code ? "10,0,Auto,*" : "10,Auto,Auto,*"), Background = bg };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions(r.Kind == RowKind.Code ? "10,0,Auto,*" : "10,Auto,Auto,*") };
         grid.Children.Add(strip);
         if (r.Kind != RowKind.Code) grid.Children.Add(Number(r.Old).At(0, 1));
         grid.Children.Add(Number(r.New).At(0, 2));
