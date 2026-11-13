@@ -3,6 +3,7 @@ using Avamux.Core.Config;
 using Avamux.Core.Dashboard;
 using Avamux.Core.Events;
 using Avamux.Core.Logging;
+using Avamux.Core.Nav;
 using Avamux.Core.Repos;
 using Avamux.Core.Search;
 using Avamux.Core.Theming;
@@ -32,6 +33,7 @@ public sealed class AppServices : IAsyncDisposable
         Events = new EventService(Paths, Config);
         Wiki = new WikiService(Paths);
         Repos = new RepoService(Paths, Config);
+        Nav = new NavService(Paths);
         Web = new WebServer(this);
         Dashboard = new DashboardService(this);
         Search = new SearchService(this);
@@ -47,6 +49,11 @@ public sealed class AppServices : IAsyncDisposable
             Sounds.Play(SoundEvent.AgentWaiting);
             if (Config.Settings.Terminal.NotifyAgentWaiting) Host.Notify($"{session.Agent ?? "Agent"} is waiting for input", session.Title);
         };
+        Nav.AttentionRequested += (page, message) =>
+        {
+            Sounds.Play(SoundEvent.AgentWaiting);
+            Host.Notify($"{page.Name} needs attention", message);
+        };
     }
 
     public AppPaths Paths { get; }
@@ -60,6 +67,7 @@ public sealed class AppServices : IAsyncDisposable
     public EventService Events { get; }
     public WikiService Wiki { get; }
     public RepoService Repos { get; }
+    public NavService Nav { get; }
     public WebServer Web { get; }
     public DashboardService Dashboard { get; }
     public CommandRegistry Commands { get; }

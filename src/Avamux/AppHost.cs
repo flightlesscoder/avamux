@@ -36,6 +36,8 @@ public sealed class AppHost(MainWindow window, IClassicDesktopStyleApplicationLi
     {
         // A detached tab is selected in its own window, which comes to the front.
         if (Views.TerminalLayout.WindowOf(id) is { } w) { w.Page.Select(id); w.Activate(); }
+        // The terminal of a custom page is shown by going to that page.
+        else if (Views.CustomTerminalPage.PageKeyOf(id) is { } page) window.Navigate(page);
         else window.Terminals.Select(id);
     });
     public string? SelectedTerminal => window.Terminals.SelectedId;

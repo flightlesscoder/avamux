@@ -5,6 +5,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avamux.Core.Commands;
+using Avamux.Core.Nav;
 using Avamux.Views;
 
 namespace Avamux;
@@ -36,6 +37,10 @@ public sealed class MainWindow : AppWindow
     private readonly Popup _toastPopup;
     private string _navSignature = "";
     private bool _buildingNav;
+    /// <summary>What each custom page that has been opened was running, to tell when it has to be started afresh.</summary>
+    private readonly Dictionary<string, string> _customSignatures = new();
+
+    private static NavService Custom => App.Services.Nav;
 
     public MainWindow()
     {
@@ -69,9 +74,14 @@ public sealed class MainWindow : AppWindow
         _pageHost.Children.Add(Terminals);
         BuildNav();
         App.Services.Config.Changed += () => Dispatcher.UIThread.Post(BuildNav);
+        Custom.Changed += () => Dispatcher.UIThread.Post(SyncCustomPages);
+        Custom.MarksChanged += () => Dispatcher.UIThread.Post(BuildNav);
+        Custom.ReloadRequested += page => Dispatcher.UIThread.Post(() => ReloadCustomPage(page.Key));
+        // Looking at the window is looking at the page in it: whatever it wanted attention for has been seen.
+        Activated += (_, _) => { if (IsCustom(CurrentPage)) Custom.ClearAttention(CurrentPage); };
         Ui.ThemeChanged += () => (_pages.GetValueOrDefault(CurrentPage) as IPage)?.OnShown();
         var start = App.Services.Config.Settings.Ui.StartPage;
-        Navigate(CommandRegistry.Pages.Contains(start) && IsShown(start) ? start : "terminals");
+        Navigate(ResolvePage(start) is { } first && IsShown(first) ? first : "terminals");
     }
 
     public TerminalsPage Terminals { get; }
@@ -82,15 +92,24 @@ public sealed class MainWindow : AppWindow
     /// <summary>The AI pages are only in the navigation when switched on under Settings → AI Workloads.</summary>
     private static bool IsShown(string key)
     {
+        if (IsCustom(key)) return Custom.Find(key) is { Enabled: true };
         var ai = App.Services.Config.Settings.Ai;
         return key switch { "chat" => ai.Chat, "workloads" => ai.Workloads, _ => true };
     }
+
+    private static bool IsCustom(string key) => key.StartsWith(CustomPage.KeyPrefix, StringComparison.Ordinal);
+
+    /// <summary>The key of a page given as a built-in name, a custom page's key, or a custom page's name. Null when there is none.</summary>
+    private static string? ResolvePage(string page) =>
+        page == "today" || CommandRegistry.Pages.Contains(page) ? page : Custom.Find(page) is { Enabled: true } custom ? custom.Key : null;
 
     private void BuildNav()
     {
         var settings = App.Services.Config.Settings;
         var mini = settings.Ui.NavStyle.Trim().Equals("mini", StringComparison.OrdinalIgnoreCase);
-        var signature = $"{mini}|{settings.Ai.Chat}|{settings.Ai.Workloads}";
+        var custom = Custom.Pages.Where(p => p.Enabled).ToList();
+        var signature = $"{mini}|{settings.Ai.Chat}|{settings.Ai.Workloads}|" +
+                        string.Join("|", custom.Select(p => $"{p.Id}\u001f{p.Name}\u001f{p.Icon}\u001f{p.Kind}\u001f{Custom.Attention(p.Id)}\u001f{Custom.Badge(p.Id)}"));
         if (signature == _navSignature) return;
         _navSignature = signature;
         _buildingNav = true;
@@ -99,13 +118,22 @@ public sealed class MainWindow : AppWindow
             _nav.Items.Clear();
             _nav.Width = mini ? 46 : 92;
             _nav.Classes.Set("mini", mini);
-            foreach (var item in NavItems.Where(i => IsShown(i.Key)))
+            var items = NavItems.Where(i => IsShown(i.Key)).Select(i => (Item: i, Page: (CustomPage?)null))
+                .Concat(custom.Select(p => (Item: new NavItem(p.Key, p.Name, $"{p.Name}\n{p.Target}", CustomPages.IconFor(p)), Page: (CustomPage?)p)));
+            foreach (var (item, page) in items)
             {
                 var content = new StackPanel { Spacing = 4, Margin = new Thickness(0, mini ? 8 : 9), HorizontalAlignment = HorizontalAlignment.Center };
-                content.Children.Add(new PathIcon { Data = item.Icon, Width = mini ? 17 : 22, Height = mini ? 17 : 22 });
-                if (!mini) content.Children.Add(new TextBlock { Text = item.Label, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center });
+                Control icon = new PathIcon { Data = item.Icon, Width = mini ? 17 : 22, Height = mini ? 17 : 22 };
+                var tip = item.Tip;
+                if (page is not null && Mark(page) is { } mark)
+                {
+                    icon = new Panel { Children = { icon, mark } };
+                    if (Custom.Attention(page.Id) is { } wants) tip += "\n" + (wants.Length > 0 ? wants : "Needs attention");
+                }
+                content.Children.Add(icon);
+                if (!mini) content.Children.Add(new TextBlock { Text = item.Label, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center, MaxWidth = 76, TextTrimming = TextTrimming.CharacterEllipsis });
                 var entry = new ListBoxItem { Tag = item.Key, Content = content, HorizontalContentAlignment = HorizontalAlignment.Center };
-                ToolTip.SetTip(entry, item.Tip);
+                ToolTip.SetTip(entry, tip);
                 ToolTip.SetPlacement(entry, PlacementMode.Right);
                 if (mini) ToolTip.SetShowDelay(entry, 200);
                 _nav.Items.Add(entry);
@@ -117,12 +145,77 @@ public sealed class MainWindow : AppWindow
         if (!IsShown(CurrentPage)) Navigate("terminals");
     }
 
+    /// <summary>The mark on a custom page's icon: its badge, or a dot while it wants attention. Null when it has neither.</summary>
+    private static Control? Mark(CustomPage page)
+    {
+        var wants = Custom.Attention(page.Id) is not null;
+        var badge = Custom.Badge(page.Id);
+        if (!wants && badge is null) return null;
+        var mark = new Border
+        {
+            Background = Ui.Tk(wants ? "warn" : "accent"), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, -5, -9, 0), IsHitTestVisible = false,
+        };
+        if (badge is null) { mark.Width = 9; mark.Height = 9; mark.CornerRadius = new CornerRadius(4.5); }
+        else
+        {
+            mark.CornerRadius = new CornerRadius(7); mark.Padding = new Thickness(4, 0); mark.MinWidth = 14; mark.Height = 14;
+            mark.Child = new TextBlock { Text = badge, FontSize = 9.5, FontWeight = FontWeight.SemiBold, Foreground = Ui.OnAccent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        }
+        return mark;
+    }
+
+    /// <summary>
+    /// Brings the window in line with the custom pages after they changed: the navigation is rebuilt, and a page
+    /// that was removed, switched off or pointed at something else is closed (its terminal ends, its plugin is
+    /// let go). A page that is still wanted is opened again the next time it is shown.
+    /// </summary>
+    private void SyncCustomPages()
+    {
+        var wanted = Custom.Pages.Where(p => p.Enabled).ToDictionary(p => p.Key);
+        var reopen = false;
+        foreach (var key in _pages.Keys.Where(IsCustom).ToList())
+        {
+            if (wanted.TryGetValue(key, out var page) && _customSignatures.GetValueOrDefault(key) == page.Signature) continue;
+            CloseCustomPage(key);
+            if (key == CurrentPage) reopen = true;
+        }
+        BuildNav();
+        if (reopen && IsShown(CurrentPage)) Show(CurrentPage);
+    }
+
+    private void CloseCustomPage(string key)
+    {
+        if (!_pages.Remove(key, out var page)) return;
+        _customSignatures.Remove(key);
+        _pageHost.Children.Remove(page);
+        try { (page as IDisposable)?.Dispose(); }
+        catch (Exception ex) { Avamux.Core.Logging.Log.Error("page", $"Closing {key} failed", ex); }
+    }
+
+    private void ReloadCustomPage(string key)
+    {
+        if (!_pages.ContainsKey(key)) return; // not open: it starts fresh when it is next shown
+        CloseCustomPage(key);
+        if (key == CurrentPage && IsShown(key)) Show(key);
+    }
+
     private ListBoxItem? NavEntry(string key) => _nav.Items.OfType<ListBoxItem>().FirstOrDefault(i => (string?)i.Tag == key);
 
     private Control GetOrCreate(string key)
     {
         if (_pages.TryGetValue(key, out var page)) return page;
-        page = key switch
+        if (IsCustom(key) && Custom.Find(key) is { } custom)
+        {
+            try { page = CustomPages.Create(custom); }
+            catch (Exception ex)
+            {
+                Avamux.Core.Logging.Log.Error("page", $"Could not open '{custom.Name}'", ex);
+                page = CustomPages.Message(CustomPages.IconFor(custom), $"{custom.Name} could not be opened", ex.GetBaseException().Message, "Try again", () => Custom.Reload(custom.Id));
+            }
+            _customSignatures[key] = custom.Signature;
+        }
+        else page = key switch
         {
             "search" => new SearchPage(),
             "settings" => new SettingsPage(),
@@ -144,6 +237,7 @@ public sealed class MainWindow : AppWindow
 
     public void Navigate(string key)
     {
+        if (ResolvePage(key) is { } resolved) key = resolved;
         if (key == "today") { OpenToday(); return; }
         // A page whose navigation entry is hidden can still be shown (from the CLI, say); nothing is selected then.
         if (NavEntry(key) is not { } item) { if (CommandRegistry.Pages.Contains(key)) { _buildingNav = true; _nav.SelectedItem = null; _buildingNav = false; Show(key); } return; }
@@ -164,9 +258,12 @@ public sealed class MainWindow : AppWindow
     private void Show(string key)
     {
         var page = GetOrCreate(key);
+        var leaving = CurrentPage != key && _pages.GetValueOrDefault(CurrentPage) is ICustomPage { } old && old is Control { IsVisible: true } ? old : null;
         foreach (var p in _pages.Values) p.IsVisible = ReferenceEquals(p, page);
         CurrentPage = key;
+        leaving?.OnHidden();
         (page as IPage)?.OnShown();
+        if (IsCustom(key)) Custom.ClearAttention(key);
     }
 
     public void Toast(string title, string message)

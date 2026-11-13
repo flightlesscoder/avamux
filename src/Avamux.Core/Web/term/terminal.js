@@ -40,27 +40,81 @@
     return t;
   }
 
+  // Sets a style property, class or CSS variable only when it differs from what was last set: this runs on every
+  // render, and touching the DOM there (even with the same value) costs a style pass per frame of output.
+  function put(s, name, value) {
+    if (s.put[name] === value) return;
+    s.put[name] = value;
+    if (name === 'class') s.pulse.className = value;
+    else if (name.startsWith('--')) s.pulse.style.setProperty(name, value);
+    else s.pulse.style[name] = value;
+  }
+
+  // The size of one cell. xterm has already measured it; reading it from the layout would force one mid-render.
+  function cell(s) {
+    try { const c = s.term._core._renderService.dimensions.css.cell; if (c.width > 0 && c.height > 0) return c; } catch { }
+    const screen = s.pulse.parentNode;
+    return { width: screen.clientWidth / s.term.cols, height: screen.clientHeight / s.term.rows };
+  }
+
   // Places the heartbeat cursor over the cell xterm's cursor is in, or hides it when there is none to show.
   function pulse(s) {
-    const p = s.pulse, term = s.term, buf = term.buffer.active;
-    s.el.classList.toggle('pulse-on', !!opts.pulse);
+    const term = s.term, buf = term.buffer.active, on = !!opts.pulse;
+    if (s.put.on !== on) { s.put.on = on; s.el.classList.toggle('pulse-on', on); }
+    if (!on) { put(s, 'class', 'pulse-cursor'); return; }
     let hidden = false;
     try { hidden = !!term._core.coreService.isCursorHidden; } catch { }
     const row = buf.baseY + buf.cursorY - buf.viewportY;
-    const screen = s.el.querySelector('.xterm-screen');
-    if (!opts.pulse || hidden || !screen || row < 0 || row >= term.rows) { p.className = 'pulse-cursor'; return; }
-    if (p.parentNode !== screen) screen.insertBefore(p, screen.firstChild);
-    const w = screen.clientWidth / term.cols, h = screen.clientHeight / term.rows;
+    if (!s.pulse.parentNode) {
+      const screen = s.el.querySelector('.xterm-screen');
+      if (screen) screen.insertBefore(s.pulse, screen.firstChild);
+    }
+    if (hidden || !s.pulse.parentNode || row < 0 || row >= term.rows) { put(s, 'class', 'pulse-cursor'); return; }
+    const c = cell(s), w = c.width, h = c.height;
     const shape = opts.pulseShape || 'block';
-    const focused = document.hasFocus() && document.activeElement === term.textarea;
-    p.className = 'pulse-cursor on ' + shape + (opts.pulseDouble ? ' double' : '') + (focused ? '' : ' idle');
-    p.style.left = Math.min(buf.cursorX, term.cols - 1) * w + 'px';
-    p.style.top = row * h + 'px';
-    p.style.width = (shape === 'bar' ? Math.max(2, Math.round(w / 5)) : w) + 'px';
-    p.style.height = h + 'px';
-    p.style.setProperty('--pc', opts.pulseColor || opts.cursor || opts.foreground);
-    p.style.setProperty('--pg', String((opts.pulseGlow == null ? 60 : opts.pulseGlow) / 100));
-    p.style.setProperty('--pd', (60 / (opts.pulseRate || 30)) + 's');
+    const focused = document.activeElement === term.textarea && document.hasFocus();
+    put(s, 'class', 'pulse-cursor on ' + shape + (opts.pulseDouble ? ' double' : '') + (focused ? '' : ' idle'));
+    // Moved with a transform so that following the cursor needs no layout.
+    put(s, 'transform', 'translate(' + Math.min(buf.cursorX, term.cols - 1) * w + 'px,' + row * h + 'px)');
+    put(s, 'width', (shape === 'bar' ? Math.max(2, Math.round(w / 5)) : w) + 'px');
+    put(s, 'height', h + 'px');
+    put(s, '--pc', opts.pulseColor || opts.cursor || opts.foreground);
+    put(s, '--pg', String((opts.pulseGlow == null ? 60 : opts.pulseGlow) / 100));
+    put(s, '--pd', (60 / (opts.pulseRate || 30)) + 's');
+  }
+
+  // Draws the CRT overlay (scanlines, a vignette and darkened edges) into its canvas. Called when the effect is
+  // switched, its strength changes or the view is resized; nothing is drawn while output scrolls.
+  const crt = document.getElementById('crt');
+  let crtDrawn = '';
+  function drawCrt() {
+    if (!opts.crt) { crtDrawn = ''; return; }
+    const ci = (opts.crtIntensity == null ? 50 : opts.crtIntensity) / 100;
+    const dpr = window.devicePixelRatio || 1, w = Math.round(innerWidth * dpr), h = Math.round(innerHeight * dpr);
+    const key = w + 'x' + h + '@' + ci;
+    if (key === crtDrawn || !w || !h) return;
+    crtDrawn = key;
+    crt.width = w; crt.height = h;
+    const g = crt.getContext('2d');
+    g.clearRect(0, 0, w, h);
+    // Scanlines: one dark line in every three.
+    g.fillStyle = 'rgba(0,0,0,' + ci * .32 + ')';
+    const line = Math.max(1, Math.round(dpr)), period = Math.max(3, Math.round(3 * dpr));
+    for (let y = 0; y < h; y += period) g.fillRect(0, y, w, line);
+    // Vignette: an ellipse reaching the corners, clear in the middle.
+    g.save();
+    g.translate(w / 2, h / 2); g.scale(w / 2 * Math.SQRT2, h / 2 * Math.SQRT2);
+    const v = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+    v.addColorStop(.55, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,' + ci * .55 + ')');
+    g.fillStyle = v; g.fillRect(-1, -1, 2, 2);
+    g.restore();
+    // Edges: a shadow falling inwards from each side.
+    const d = ci * 50 * dpr, edge = 'rgba(0,0,0,' + ci * .3 + ')', mid = 'rgba(0,0,0,' + ci * .09 + ')';
+    for (const [x0, y0, x1, y1, rx, ry, rw, rh] of [[0, 0, d, 0, 0, 0, d, h], [w, 0, w - d, 0, w - d, 0, d, h], [0, 0, 0, d, 0, 0, w, d], [0, h, 0, h - d, 0, h - d, w, d]]) {
+      const e = g.createLinearGradient(x0, y0, x1, y1);
+      e.addColorStop(0, edge); e.addColorStop(.4, mid); e.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = e; g.fillRect(rx, ry, rw, rh);
+    }
   }
 
   function chrome() {
@@ -68,6 +122,7 @@
     document.body.classList.toggle('crt-on', !!opts.crt);
     document.body.classList.toggle('crt-flicker', !!opts.crt && !!opts.crtFlicker);
     document.documentElement.style.setProperty('--ci', String((opts.crtIntensity == null ? 50 : opts.crtIntensity) / 100));
+    drawCrt();
     const r = document.documentElement.style;
     r.setProperty('--panel', opts.panel || '#1f2330');
     r.setProperty('--line', opts.line || '#3b4252');
@@ -163,7 +218,7 @@
     if (opts.renderer === 'webgl') {
       try { const gl = new WebglAddon.WebglAddon(); gl.onContextLoss(() => gl.dispose()); term.loadAddon(gl); } catch (e) { console.warn('webgl unavailable', e); }
     }
-    const s = { id, el, term, fit, ws: null, exited: false, gone: false, pulse: document.createElement('div') };
+    const s = { id, el, term, fit, ws: null, exited: false, gone: false, pulse: document.createElement('div'), put: {} };
     sessions.set(id, s);
     term.onRender(() => pulse(s));
     term.onScroll(() => pulse(s));
@@ -250,7 +305,7 @@
   let resizeTimer = null;
   new ResizeObserver(() => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { const s = sessions.get(active); if (s) refit(s); }, 30);
+    resizeTimer = setTimeout(() => { const s = sessions.get(active); if (s) refit(s); drawCrt(); }, 30);
   }).observe(root);
   if (document.fonts) {
     // Load the symbols font up front; xterm measures and paints as soon as a terminal opens.
