@@ -1,0 +1,12 @@
+<Project>
+  <!-- See AvamuxEasterEggs in Directory.Build.props. When it is off, EasterEggs folders are not compiled at all. -->
+  <PropertyGroup Condition="'$(AvamuxEasterEggs)' == 'true'">
+    <DefineConstants>$(DefineConstants);EASTER_EGGS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(AvamuxEasterEggs)' == 'true'">
+    <EmbeddedResource Include="EasterEggs/Sounds/*.wav" LogicalName="Avamux.EasterEggs.%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(AvamuxEasterEggs)' != 'true'">
+    <Compile Remove="EasterEggs/**" />
+  </ItemGroup>
+</Project>

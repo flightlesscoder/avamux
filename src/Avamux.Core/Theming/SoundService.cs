@@ -13,7 +13,8 @@ public enum SoundEvent { EventStart, EventEnd, Timer, WatchChanged, PullRequest,
 public sealed class SoundService(AppPaths paths, ConfigService config)
 {
     public static readonly string[] Sets = ["soft", "retro", "synth"];
-    private const int Rate = 44100;
+    public const int SampleRate = 44100;
+    private const int Rate = SampleRate;
     private const int SynthVersion = 2;
     private DateTime _last;
 
@@ -79,7 +80,29 @@ public sealed class SoundService(AppPaths paths, ConfigService config)
         return file;
     }
 
-    private static void PlayFile(string file, double volume)
+    /// <summary>
+    /// Plays a one-off synthesised clip at the sound volume, ignoring the per-event switches. The samples are made
+    /// once and kept as clips/<paramref name="name"/>.wav; change the name when the synthesis changes.
+    /// </summary>
+    public void PlayClip(string name, Func<float[]> synthesize, CancellationToken cancel = default)
+    {
+        if (Quiet) return;
+        try
+        {
+            var volume = Math.Clamp(config.Settings.Theme.SoundVolume, 0, 100) / 100.0;
+            if (volume <= 0) return;
+            var file = Path.Combine(Folder, "clips", name + ".wav");
+            if (!File.Exists(file))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+                File.WriteAllBytes(file, Wav(synthesize()));
+            }
+            _ = Task.Run(() => PlayFile(file, volume, cancel));
+        }
+        catch (Exception ex) { Log.Warn("sound", "Could not play a clip: " + ex.Message); }
+    }
+
+    private static void PlayFile(string file, double volume, CancellationToken cancel = default)
     {
         var v = volume.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
         (string Exe, string[] Args)[] players = OperatingSystem.IsMacOS()
@@ -93,7 +116,13 @@ public sealed class SoundService(AppPaths paths, ConfigService config)
                 foreach (var a in args) psi.ArgumentList.Add(a);
                 using var p = Process.Start(psi);
                 if (p is null) continue;
-                p.WaitForExit(15000);
+                var waited = 0;
+                while (!p.WaitForExit(100) && (waited += 100) < 30000)
+                {
+                    if (!cancel.IsCancellationRequested) continue;
+                    try { p.Kill(); } catch { /* already gone */ }
+                    return;
+                }
                 if (p.HasExited && p.ExitCode == 0) return;
             }
             catch (System.ComponentModel.Win32Exception) { /* player not installed: try the next */ }
