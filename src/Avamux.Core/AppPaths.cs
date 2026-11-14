@@ -11,7 +11,7 @@ public sealed class AppPaths
             ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         WorkingDir = workingDir ?? Environment.CurrentDirectory;
         DataDir = dataDir ?? Environment.GetEnvironmentVariable("AVAMUX_DATA_DIR") ?? DefaultDataDir(HomeDir);
-        foreach (var d in new[] { DataDir, LogsDir, AppLogsDir, CrashDir, TerminalLogsDir, EventLogsDir, WikiDir, DashboardDir, PluginsDir })
+        foreach (var d in new[] { DataDir, LogsDir, AppLogsDir, CrashDir, TerminalLogsDir, EventLogsDir, WikiDir, DashboardDir, PluginsDir, ThemesDir })
             Directory.CreateDirectory(d);
     }
 
@@ -35,6 +35,8 @@ public sealed class AppPaths
     public string WikiDir => Path.Combine(DataDir, "wiki");
     public string DashboardDir => Path.Combine(DataDir, "dashboard");
     public string PluginsDir => Path.Combine(DataDir, "plugins");
+    /// <summary>Theme files (*.json, *.yaml, *.yml), one theme per file.</summary>
+    public string ThemesDir => Path.Combine(DataDir, "themes");
     /// <summary>Files attached to events, one folder per event id.</summary>
     public string AttachmentsDir => Path.Combine(DataDir, "attachments");
     /// <summary>

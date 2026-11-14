@@ -28,8 +28,10 @@ Linux needs WebKitGTK 4.1 (`libwebkit2gtk-4.1`). macOS uses the system WKWebView
 | Events | Timers, scheduled tasks and calendar events (multi-day, weekdays, weekly, monthly, yearly, fixed interval) that can run a script on start and on end. Events can have a location, file attachments, a colour and a markdown description. Double-click an event on the calendar to edit it, or an empty spot to add one. |
 | Dashboard | Your own HTML/CSS/JS from the dashboard folder, with developer tools, an Edit button that opens the folder in your editor, togglable extra CSS/JS sources, and `window.avamux` to control the app. |
 | Logs | App logs, crash reports, history of ended terminals, script output; retention by size (200 MB), age and count. |
-| Wiki | Markdown editor and live preview with folders, links (`[[Page]]`), front matter, syntax-highlighted code blocks and pictures. Paste a picture straight into a page: it is saved next to the page and linked. Click a picture to zoom and pan; right-click it for Show in Folder, Copy and Copy Path. Also previews images, PDFs, audio, video and text files, and opens anything else in its default app. Entries can be opened in their own window. The last scroll position of recent files is remembered (`ui-state.json` in the data folder). |
-| Repos | Changes, history, branches and pull requests for one configured git repository or all of them. Stage or unstage files, hunks (right-click the coloured strip) or single lines (right-click a line number); diff or whole-file view; switch branches; inspect a commit file by file; cherry-pick, revert, reset, tag. |
+| Wiki | Markdown editor (coloured to match the theme, with undo/redo) and live preview with folders, links (`[[Page]]`), front matter, syntax-highlighted code blocks (with a copy button) and pictures. Edits are saved automatically after `wiki.autoSaveSeconds` without a change (`wiki.autoSave`). Paste a picture or drop any file onto a page: it is saved next to the page and linked. Click a picture to zoom and pan; right-click it for Show in Folder, Copy and Copy Path. Also previews images, PDFs, audio, video, text files, CSV/TSV (as tables) and zip archives (as a listing), and opens anything else in its default app. Pictures, PDFs and recordings over `wiki.clickToPreviewMegabytes` (20) wait behind a "Load preview" button, and audio and video never start loading until played. Back and Forward buttons (also Alt+Left/Right and the mouse's side buttons) walk through the last 50 pages and files viewed. Entries can be opened in their own window. The last scroll position of recent files is remembered (`ui-state.json` in the data folder). The **Git** button keeps the wiki's history: commit, branches, history, and earlier versions of a page. See [The wiki in git](#the-wiki-in-git). |
+| Repos | Changes, history, branches and pull requests for one configured git repository or all of them. Stage or unstage files, hunks (right-click the coloured strip) or single lines (right-click a line number); diff or whole-file view; switch branches; inspect a commit file by file; cherry-pick, revert, reset, tag. Resolve merge conflicts in a three-way merge tool (see below). |
+| C# Interactive | A C# prompt that runs inside the running avamux, next to a screen of live controls built from XAML and from the C# you type. See [C# Interactive](#c-interactive). |
+| Caffeine | Keeps the computer awake until you turn it off, for a while (15 minutes to 8 hours, a length such as `1h30m`, or until a clock time), or while terminals are busy. See [Caffeine](#caffeine). |
 | AI Chat, Workloads | Placeholders, shown when switched on under Settings → AI Workloads. |
 | Your own | Pages you add under Settings → Custom pages: a terminal running one command, a web page, or a .NET plugin. See [Custom pages](#custom-pages). |
 
@@ -40,11 +42,193 @@ the theme's colours). "Simple" is the original look; "90's Desktop Computer OS C
 title bar; the others use palettes from the kitty themes in terminal-stuff. Terminals follow the theme unless
 `terminal.background` / `terminal.foreground` are set.
 
+`theme.glow` adds a neon glow around whatever is selected or current (list and tree selections, the active navigation button and tab, the current terminal tab, today and the selected day in the calendar). `theme.glowIntensity` (0 to 100) sets its strength and `theme.glowColor` its colour; empty follows the accent.
+
+### Theme files and the theme editor
+
+Themes can also be files: JSON or YAML, one theme per file, in the data folder's `themes/` folder (`avamux theme
+folder` prints it). The file name is the theme's id, and a file named after a built-in theme (`simple.yaml`)
+replaces it. Every key is optional; what a file leaves out comes from its `base` theme (Simple unless it names one):
+
+```yaml
+name: Synth Sunset
+base: synthwave-kat     # start from another theme (built-in or file)
+accent: "#ffaa00"       # recolours accent, links and selection from one colour
+radius: 4               # corners; 0 is square
+colors:                 # any colour token; colours must be in quotes in YAML
+  bg: "#2a0f3d"
+  cellSel: "#4a2060"
+ansi:                   # 16 terminal colours as a list, or by name
+  red: "#ff5577"
+```
+
+`derive: { background, foreground, accent }` builds every colour from three (handy for a new light or dark theme),
+and `light`, `chrome` (system/custom), `sounds` (soft/retro/synth), `bevel` and `font` set the rest. `avamux theme
+help` lists the keys and `avamux theme show <id>` prints any theme in full, with a comment on every colour.
+Files are re-read when they change on disk; one that cannot be read is listed under Settings → Themes with
+everything that is wrong with it.
+
+**Theme Editor…** (Settings → Themes, or right-click a theme tile, or `avamux theme edit [id]`) edits a theme while
+showing it: every change applies to the whole app straight away, including terminals and the wiki preview, and
+nothing is written until Save. It has
+- the colours, grouped and explained, each with a colour picker, a hex box and a button back to the saved colour;
+- "Start from three colours" to rebuild everything from a background, text and accent colour;
+- the theme file itself (YAML or JSON) on the **Theme File** tab, applied as you type, with problems listed under it;
+- a preview screen that uses every colour: click any part of it to jump to its colour;
+- a readability check that flags text whose contrast is too low.
+
+Saving a built-in theme makes a copy (New Copy…); Import… and Export… move theme files in and out; Use This Theme
+switches to it. Closing the editor with unsaved changes asks first and puts the chosen theme back.
+
 Themes also have sounds, played when an event starts or ends, a timer goes off, a watched item or pull request
 changes, or an AI agent in a terminal starts waiting for input. Each can be switched off, and files named
 `event-start`, `event-end`, `timer`, `watch-changed`, `pull-request` or `agent-waiting` (.wav, .ogg, .flac, .mp3)
 in the data folder's `sounds/custom/` replace the built-in ones. Playback uses `pw-play`, `paplay` or `aplay` on
 Linux and `afplay` on macOS.
+
+## Resolving conflicts
+
+When a merge, rebase, cherry-pick or revert stops for conflicts, the Changes tab says so: the tab and the
+repository's header carry a red count, a banner names what is being merged into what, and the conflicted files are
+listed first under **Conflicts**. This works the same with one repository selected or all of them.
+
+![Conflicts listed in the Changes tab](docs/screenshots/merge/01-conflicts-in-the-changes-tab.png)
+
+Selecting a conflicted file opens the merge tool: **Yours**, **Result** and **Theirs** side by side, with line
+numbers and syntax highlighting, built from the three versions git keeps of the file (not from the conflict markers).
+Inside a changed line, the words that actually differ are marked more strongly than the rest of the line.
+
+![The three-way view, given the whole width](docs/screenshots/merge/02-three-way-view.png)
+
+- Changes only one side made are already in the result; `✕` beside one leaves it out, `»` / `«` puts it back.
+- Conflicts start open. `»` takes yours, `«` takes theirs, and taking the second side as well appends it. The mark
+  in the result's margin opens a menu: both in either order, neither, or **Edit the Result Here** to type the lines.
+- **Accept Yours** / **Accept Theirs** settle the conflicts still open, every conflict, or take that side's whole file.
+- `↑` `↓` walk the conflicts, `◀` `▶` the conflicted files; `⤢` gives the tool the whole width.
+- **Sync scrolling** keeps the three panes together; switch it off to scroll one on its own.
+- **Mark Resolved** lights up once nothing is open. It writes the result, stages the file and moves to the next one.
+
+| | |
+|---|---|
+| ![Choosing for one conflict](docs/screenshots/merge/03-conflict-menu.png) | ![Accepting a side](docs/screenshots/merge/04-accept-menu.png) |
+| ![Sides taken and left out](docs/screenshots/merge/05-taking-sides.png) | ![The same in a light theme](docs/screenshots/merge/05-taking-sides-classic90s.png) |
+
+### Editing the result
+
+The result can also be edited as plain text, in two ways. Either way, conflicts still open appear between git's
+`<<<<<<<` / `=======` / `>>>>>>>` markers, and what you type comes back into the merge without losing anything:
+every change you did not touch keeps its decision, a conflict is settled once its markers are gone, and lines you
+edited elsewhere become hand-made changes of their own (shown in the warning colour, undone from the margin menu).
+
+- **Edit Result** turns the Result pane into an editor. **Done Editing** or Esc goes back to the aligned view.
+- **Editor** opens the result in `repositories.editor` (vim, neovim…) in a terminal tab and links the two: each save
+  there updates the Result pane, and each decision made in the tool is written to the file.
+
+| | |
+|---|---|
+| ![Editing the result in the tool](docs/screenshots/merge/06-editing-the-result.png) | ![The same in another theme](docs/screenshots/merge/06-editing-the-result-synthwave-kat.png) |
+| ![Editing the result in vim](docs/screenshots/merge/07-editing-in-vim.png) | ![The Result pane after saving in vim](docs/screenshots/merge/08-result-follows-the-editor.png) |
+
+### Finishing
+
+A file one side deleted, or one that is not text, offers a choice of side instead. When no conflict is left the
+banner turns green and **Continue** commits the merge (or carries on with the rebase); **Abort** puts everything back.
+During a rebase git's sides are swapped, and the pane titles say which is which.
+
+| | |
+|---|---|
+| ![A file one side deleted](docs/screenshots/merge/09-one-side-deleted-the-file.png) | ![All conflicts resolved](docs/screenshots/merge/10-all-conflicts-resolved.png) |
+
+The colours follow the theme: yours is the accent, theirs the theme colour furthest from it.
+
+![The three-way view in the Synthwave Kat theme](docs/screenshots/merge/05-taking-sides-synthwave-kat.png)
+
+## The wiki in git
+
+The wiki folder can be a git repository of its own. The **Git** button in the wiki's toolbar shows the branch and
+how many files changed since the last commit, and opens a menu:
+
+- **Start Keeping History with Git** runs `git init` in the wiki folder (only offered until it is a repository).
+- **Commit All Changes…** stages everything and opens the commit dialog, the same one the Repositories page uses.
+- **Review Changes…**, **History…** and **Branches…** open the wiki in the Repositories screen, in a window of its
+  own and showing the wiki alone. Everything that screen does works here: stage files, hunks or lines; view a
+  commit file by file; revert, cherry-pick, reset (soft, mixed, hard), check out a commit, tag; create, merge,
+  delete and switch branches; resolve conflicts in the merge tool.
+- **Switch Branch** lists the branches and makes new ones.
+- **History of *page*…** lists the commits that changed the open page and shows the page as each left it.
+  **Restore This Version** puts the page back that way, as a change to commit, so nothing is lost.
+- **Discard Changes to *page*…** puts the open page back the way the last commit has it.
+
+Unsaved edits are saved before git looks, and when git changes files (a branch switch, a revert, a restore) the
+tree, the editor and the preview follow. From the command line the wiki is the repository called `wiki`:
+`avamux repo status wiki`, `avamux repo log wiki`, `avamux repo switch wiki drafts --create`,
+`avamux repo commit wiki "Notes from today"`, and `avamux repo select wiki` opens its window.
+
+## C# Interactive
+
+A C# prompt inside the running app, for trying things against the live avamux. On the left is a terminal: type C#
+and press Enter. On the right is a screen of live controls that the code (and a XAML document) builds, and that
+you can click.
+
+```csharp
+> new [] { "a", "b", "c" }.ToList().Select(x => x)
+IEnumerable<string> { "a", "b", "c" }
+> var b = Add(new Button { Content = "Hello" });
+> b.Click += (_, _) => Print("clicked");                 // clicking the button writes to the terminal
+> avamux.Terminals.Sessions.Select(t => t.Title)
+> await avamux.Command("terminal new", new { name = "build" })
+> await Task.Delay(1000); DateTime.Now                   // await works anywhere
+```
+
+- An expression without a semicolon shows its value, laid out like a REPL does (lists, dictionaries, tuples,
+  records and anonymous objects spelled out, JSON indented). Variables, `using`s, methods and classes stay for
+  later lines. `Vars()` lists the variables, `Help()` everything else.
+- **Several lines**: Enter continues a statement that is not finished (an open brace, a missing semicolon),
+  Shift+Enter always starts a new line, Ctrl+Enter always runs. Pasted code keeps its lines. Up and Down walk the
+  history; Esc empties the prompt; Ctrl+L empties the terminal.
+- **Async**: `await` anything. The window stays responsive while awaited code waits. A task left un-awaited is
+  shown as running and its result is printed when it finishes. **Stop** gives the prompt back and cancels the
+  `Cancel` token (`await Task.Delay(60000, Cancel)`).
+- **avamux**: the `avamux` variable is the running app: `avamux.Terminals`, `.Wiki`, `.Events`, `.Watches`,
+  `.Repos`, `.Settings`, `.Host`, `.Services` (everything), `avamux.Notify(title, text)`, `avamux.Navigate(page)`,
+  and `await avamux.Command(name, new { option = value })` for any command the CLI has.
+- **The screen**: `Add(control)` puts a control on it and returns it, `Xaml("<Button Content='Hi'/>")` builds one
+  from XAML text, `Find<Button>("name")` gets one by its `Name`, `Screen` is the panel itself. The **XAML** tab
+  holds a document the top of the screen is built from (Apply, or Ctrl+Enter); in it,
+  `i:On.Click='Print("clicked")'` runs C# from the session when the control is clicked.
+- `Print(value)` and `Console.WriteLine` write to the terminal, also from event handlers and other threads. An
+  exception thrown later by a handler is shown there too.
+
+The page starts with a few working examples (shown in the terminal as the code that made them): a button that
+prints a message, one that raises an avamux notification, one with an async handler, a slider bound to a label,
+and the same from XAML. **Reset** forgets every variable and builds them again.
+
+Code runs on the UI thread, so it can touch controls, and so a loop that never awaits freezes the window until it
+ends: await, or use `Task.Run`, for anything long. It runs with everything avamux can do; it is your own machine
+and your own code, like a plugin.
+
+## Caffeine
+
+The Caffeine page keeps the computer from sleeping (and, with `caffeine.keepDisplayOn`, the screen from blanking):
+- **until you turn it off**;
+- **for a while**: 15 minutes to 8 hours, a length (`45m`, `1h30m`) or a clock time (`17:30`); it turns itself off
+  and says so when the time is up;
+- **while terminals are busy**: whenever a terminal is running a command or an AI agent is working, and for
+  `caffeine.graceMinutes` (5) after the last one goes quiet. A terminal at its prompt, or an agent waiting for
+  input, does not count.
+
+A dot on the navigation button shows when it is on (green while it is holding the computer awake). From the CLI:
+`avamux caffeine on [--for 2h | --until 17:30 | --terminals]`, `avamux caffeine off`, `avamux caffeine status`.
+It uses `systemd-inhibit` on Linux, `caffeinate` on macOS and the power API on Windows, and ends when avamux closes.
+
+## The boss screen
+
+Ctrl+Shift+B (`ui.bossKey`, empty to switch it off) swaps the window for something that looks like work, in the
+spirit of the boss keys of old DOS games: a budget spreadsheet, or with `ui.bossScreen` set to `build`, a build log
+that scrolls forever. The window title changes to match, sounds stay quiet, and avamux's other windows are minimized
+(`ui.bossHidesWindows`). The same key or Esc brings everything back; terminals keep running underneath. It works
+while a terminal has the keyboard too, but not while typing in the dashboard or the wiki preview. `avamux app boss`
+toggles it from the command line.
 
 ## Pull requests are watches
 
@@ -88,6 +272,8 @@ avamux repo prs avamux --mine
 avamux search "release notes" --source wiki --source events
 avamux wiki today
 avamux theme set classic90s
+avamux theme show synthwave-kat --file mine.yaml && avamux theme import mine.yaml --use
+avamux caffeine on --for 1h30m
 ```
 
 Add `--json` to any command for machine-readable output. The same commands are available to dashboard

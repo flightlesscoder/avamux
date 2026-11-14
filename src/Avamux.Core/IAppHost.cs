@@ -19,6 +19,10 @@ public interface IAppHost
     void SelectRepository(string? id);
     /// <summary>Runs a query in the Search tab.</summary>
     void Search(string query);
+    /// <summary>Opens the theme editor, on a given theme or the current one.</summary>
+    void OpenThemeEditor(string? theme);
+    /// <summary>Shows (true), hides (false) or toggles (null) the boss screen.</summary>
+    void BossScreen(bool? show);
 }
 
 public class NullAppHost : IAppHost
@@ -38,6 +42,8 @@ public class NullAppHost : IAppHost
     public virtual void OpenWikiPage(string path) { }
     public virtual void SelectRepository(string? id) { }
     public virtual void Search(string query) { }
+    public virtual void OpenThemeEditor(string? theme) { }
+    public virtual void BossScreen(bool? show) { }
 }
 
 public static class Shell

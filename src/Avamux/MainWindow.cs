@@ -26,6 +26,8 @@ public sealed class MainWindow : AppWindow
         new("logs", "Logs", "Logs", Icons.TextBoxOutline),
         new("wiki", "Wiki", "Wiki", Icons.BookOpenVariant),
         new("repositories", "Repos", "Repositories", Icons.SourceBranch),
+        new("interactive", "C# Interactive", "C# Interactive: run C# inside the running avamux", Icons.CodeBraces),
+        new("caffeine", "Caffeine", "Caffeine: keep the computer awake", Icons.Coffee),
         new("chat", "AI Chat", "AI Chat", Icons.Forum),
         new("workloads", "Workloads", "Workloads: providers, work queues and models", Icons.Server),
     ];
@@ -33,6 +35,10 @@ public sealed class MainWindow : AppWindow
     private readonly Dictionary<string, Control> _pages = new();
     private readonly ListBox _nav = new() { Classes = { "nav" }, Background = Brushes.Transparent, Padding = new Thickness(0, 8), SelectionMode = SelectionMode.Single };
     private readonly Panel _pageHost = new();
+    private readonly Grid _main;
+    private readonly ContentControl _boss = new() { IsVisible = false, HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
+    private string? _realTitle;
+    private readonly List<Window> _hiddenForBoss = [];
     private readonly StackPanel _toasts = new() { Spacing = 8 };
     private readonly Popup _toastPopup;
     private string _navSignature = "";
@@ -53,7 +59,7 @@ public sealed class MainWindow : AppWindow
             PlacementTarget = _pageHost, Placement = PlacementMode.AnchorAndGravity, PlacementAnchor = Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.BottomRight,
             PlacementGravity = Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.TopLeft, HorizontalOffset = -18, VerticalOffset = -18, IsLightDismissEnabled = false, Child = _toasts,
         };
-        Body = new Grid
+        _main = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,*"),
             Children =
@@ -63,6 +69,13 @@ public sealed class MainWindow : AppWindow
                 _toastPopup.At(0, 1),
             },
         };
+        // The boss screen sits over everything; the pages stay where they are (hidden), so terminals keep running.
+        Body = new Panel { Children = { _main, _boss } };
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (BossKey() is { } key && key.Matches(e) || _boss.IsVisible && e.Key == Avalonia.Input.Key.Escape) { e.Handled = true; ToggleBoss(null); }
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        App.Services.Caffeine.Changed += () => Dispatcher.UIThread.Post(BuildNav);
         _nav.SelectionChanged += (_, _) =>
         {
             if (_buildingNav || _nav.SelectedItem is not ListBoxItem { Tag: string key }) return;
@@ -78,13 +91,60 @@ public sealed class MainWindow : AppWindow
         Custom.MarksChanged += () => Dispatcher.UIThread.Post(BuildNav);
         Custom.ReloadRequested += page => Dispatcher.UIThread.Post(() => ReloadCustomPage(page.Key));
         // Looking at the window is looking at the page in it: whatever it wanted attention for has been seen.
-        Activated += (_, _) => { if (IsCustom(CurrentPage)) Custom.ClearAttention(CurrentPage); };
+        Activated += (_, _) => { TaskbarAlert.Clear(this); if (IsCustom(CurrentPage)) Custom.ClearAttention(CurrentPage); };
         Ui.ThemeChanged += () => (_pages.GetValueOrDefault(CurrentPage) as IPage)?.OnShown();
         var start = App.Services.Config.Settings.Ui.StartPage;
         Navigate(ResolvePage(start) is { } first && IsShown(first) ? first : "terminals");
     }
 
     public TerminalsPage Terminals { get; }
+
+    public bool BossShowing => _boss.IsVisible;
+
+    private static Avalonia.Input.KeyGesture? BossKey()
+    {
+        var text = App.Services.Config.Settings.Ui.BossKey;
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        try { return Avalonia.Input.KeyGesture.Parse(text.Trim()); } catch { return null; }
+    }
+
+    /// <summary>Shows (true), hides (false) or toggles (null) the boss screen.</summary>
+    public void ToggleBoss(bool? show)
+    {
+        var want = show ?? !_boss.IsVisible;
+        if (want == _boss.IsVisible) return;
+        var ui = App.Services.Config.Settings.Ui;
+        if (want)
+        {
+            var kind = BossScreen.Kinds.Contains(ui.BossScreen.Trim().ToLowerInvariant()) ? ui.BossScreen.Trim().ToLowerInvariant() : "spreadsheet";
+            _boss.Content = BossScreen.Build(kind);
+            _realTitle = Title;
+            Title = BossScreen.TitleFor(kind);
+            _toastPopup.IsOpen = false;
+            _main.IsVisible = false;
+            _boss.IsVisible = true;
+            App.Services.Sounds.Quiet = true;
+            if (ui.BossHidesWindows && Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime life)
+                foreach (var w in life.Windows.Where(w => w != this && w.IsVisible && w.WindowState != WindowState.Minimized).ToList())
+                {
+                    _hiddenForBoss.Add(w);
+                    w.WindowState = WindowState.Minimized;
+                }
+            _boss.Focus();
+        }
+        else
+        {
+            _boss.IsVisible = false;
+            _boss.Content = null;
+            _main.IsVisible = true;
+            Title = _realTitle ?? "avamux";
+            App.Services.Sounds.Quiet = false;
+            foreach (var w in _hiddenForBoss) w.WindowState = WindowState.Normal;
+            _hiddenForBoss.Clear();
+            Activate();
+            (_pages.GetValueOrDefault(CurrentPage) as IPage)?.OnShown();
+        }
+    }
     public string CurrentPage { get; private set; } = "terminals";
 
     public T? Page<T>(string key) where T : Control => GetOrCreate(key) as T;
@@ -108,7 +168,8 @@ public sealed class MainWindow : AppWindow
         var settings = App.Services.Config.Settings;
         var mini = settings.Ui.NavStyle.Trim().Equals("mini", StringComparison.OrdinalIgnoreCase);
         var custom = Custom.Pages.Where(p => p.Enabled).ToList();
-        var signature = $"{mini}|{settings.Ai.Chat}|{settings.Ai.Workloads}|" +
+        var caffeine = App.Services.Caffeine.Status;
+        var signature = $"{mini}|{settings.Ai.Chat}|{settings.Ai.Workloads}|{caffeine.Mode}|{caffeine.Holding}|" +
                         string.Join("|", custom.Select(p => $"{p.Id}\u001f{p.Name}\u001f{p.Icon}\u001f{p.Kind}\u001f{Custom.Attention(p.Id)}\u001f{Custom.Badge(p.Id)}"));
         if (signature == _navSignature) return;
         _navSignature = signature;
@@ -125,6 +186,15 @@ public sealed class MainWindow : AppWindow
                 var content = new StackPanel { Spacing = 4, Margin = new Thickness(0, mini ? 8 : 9), HorizontalAlignment = HorizontalAlignment.Center };
                 Control icon = new PathIcon { Data = item.Icon, Width = mini ? 17 : 22, Height = mini ? 17 : 22 };
                 var tip = item.Tip;
+                if (item.Key == "caffeine" && caffeine.Mode != Avamux.Core.Awake.CaffeineMode.Off)
+                {
+                    icon = new Panel { Children = { icon, new Border
+                    {
+                        Width = 9, Height = 9, CornerRadius = new CornerRadius(4.5), Background = Ui.Tk(caffeine.Holding ? "ok" : "faint"),
+                        HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, -5, -9, 0), IsHitTestVisible = false,
+                    } } };
+                    tip += "\n" + caffeine.Describe(DateTime.Now);
+                }
                 if (page is not null && Mark(page) is { } mark)
                 {
                     icon = new Panel { Children = { icon, mark } };
@@ -225,6 +295,8 @@ public sealed class MainWindow : AppWindow
             "logs" => new LogsPage(),
             "wiki" => new WikiPage(),
             "repositories" => new RepositoriesPage(),
+            "interactive" => new Avamux.Scripting.InteractivePage(),
+            "caffeine" => new CaffeinePage(),
             "chat" => new ChatPage(),
             "workloads" => new WorkloadsPage(),
             _ => new TextBlock { Text = key },

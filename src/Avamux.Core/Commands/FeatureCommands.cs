@@ -389,9 +389,9 @@ public sealed partial class CommandRegistry
         });
         Add("repo select", "Show a repository (or \"all\") in the Repositories tab.", [P("id", "Repository id, name, path, or all.", true)], a =>
         {
-            var id = a.Require("id");
-            s.Host.Navigate("repositories");
-            s.Host.SelectRepository(id.Equals("all", StringComparison.OrdinalIgnoreCase) ? null : s.Repos.Get(id).Id);
+            var id = a.Require("id").Equals("all", StringComparison.OrdinalIgnoreCase) ? null : s.Repos.Get(a.Require("id")).Id;
+            if (id != Wiki.WikiService.RepoId) s.Host.Navigate("repositories"); // the wiki's repository opens in its own window
+            s.Host.SelectRepository(id);
             return "ok";
         });
     }

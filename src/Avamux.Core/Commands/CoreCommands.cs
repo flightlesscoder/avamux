@@ -7,7 +7,7 @@ namespace Avamux.Core.Commands;
 
 public sealed partial class CommandRegistry
 {
-    public static readonly string[] Pages = ["terminals", "search", "settings", "watching", "events", "dashboard", "logs", "wiki", "repositories", "chat", "workloads"];
+    public static readonly string[] Pages = ["terminals", "search", "settings", "watching", "events", "dashboard", "logs", "wiki", "repositories", "interactive", "caffeine", "chat", "workloads"];
 
     private void AddSearchCommands(AppServices s)
     {
@@ -19,15 +19,70 @@ public sealed partial class CommandRegistry
             var hits = await s.Search.SearchAsync(query, a.List("source"));
             return J(hits.Select(h => new { source = h.Source, title = h.Title, detail = h.Detail, target = h.Target, extra = h.Extra, line = h.Line == 0 ? (int?)null : h.Line }));
         });
-        Add("theme list", "List the available themes.", [], _ => J(Theming.Themes.All.Select(t => new { id = t.Id, name = t.Name, description = t.Description })));
+        Add("theme list", "List the available themes (built-in and theme files).", [], _ => J(Theming.Themes.All.Select(t => new
+        {
+            id = t.Id, name = t.Name, description = t.Description, light = t.Light, file = t.File,
+            current = string.Equals(t.Id, Theming.Themes.Find(s.Config.Settings.Theme.Name).Id, StringComparison.OrdinalIgnoreCase),
+        })));
         Add("theme set", "Switch theme (same as settings set theme.name).", [P("name", "Theme id or name.", true), O("scope", "Which file: home (default), home-local, working, working-local.")], a =>
         {
-            var name = a.Require("name");
-            var theme = Theming.Themes.All.FirstOrDefault(t => string.Equals(t.Id, name, StringComparison.OrdinalIgnoreCase) || string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase))
-                ?? throw new ArgumentException($"Unknown theme '{name}'. Themes: {string.Join(", ", Theming.Themes.All.Select(t => t.Id))}.");
+            var theme = FindTheme(a.Require("name"));
             s.Config.Set("theme.name", JsonValue.Create(theme.Id), ParseScope(a.Str("scope")));
             return theme.Id;
         });
+        Add("theme show", "Print a theme as YAML or JSON (every colour), ready to save as a theme file.",
+            [P("name", "Theme id or name. Default: the current theme."), O("format", "yaml (default) or json."), O("file", "Write it to this file instead of printing it.")], a =>
+        {
+            var theme = a.Str("name") is { Length: > 0 } n ? FindTheme(n) : Theming.Themes.Find(s.Config.Settings.Theme.Name);
+            var format = a.Str("format") ?? (a.Str("file") is { } f ? Theming.ThemeFile.FormatOf(f) : "yaml");
+            if (format is not ("yaml" or "json")) throw new ArgumentException("format must be yaml or json.");
+            var text = theme.File is { } source && Theming.ThemeFile.FormatOf(source) == format ? File.ReadAllText(source) : Theming.ThemeFile.Write(theme, format);
+            if (a.Str("file") is not { } file) return text;
+            File.WriteAllText(file, text);
+            return file;
+        });
+        Add("theme validate", "Check a theme file and report every problem in it.", [P("file", "Path to a .yaml, .yml or .json file.", true)], a =>
+        {
+            var file = a.Require("file");
+            try
+            {
+                var t = Theming.ThemeFile.Parse(File.ReadAllText(file), Theming.ThemeStore.IdOf(file), Theming.ThemeFile.FormatOf(file));
+                return J(new { ok = true, id = t.Id, name = t.Name, light = t.Light });
+            }
+            catch (Theming.ThemeFileException ex) { return J(new { ok = false, problems = ex.Problems }); }
+        });
+        Add("theme import", "Copy a theme file into the themes folder (after checking it).",
+            [P("file", "Path to a .yaml, .yml or .json file.", true), O("id", "Theme id to save it as (default: the file name)."), F("use", "Switch to it afterwards.")], a =>
+        {
+            var theme = s.ThemeFiles.Import(a.Require("file"), a.Str("id"));
+            if (a.Flag("use")) s.Config.Set("theme.name", JsonValue.Create(theme.Id), ConfigScope.Home);
+            return J(new { id = theme.Id, name = theme.Name, file = theme.File });
+        });
+        Add("theme delete", "Delete a theme file. A file that replaced a built-in theme brings the built-in one back.", [P("name", "Theme id or name.", true)], a =>
+        {
+            var name = a.Require("name");
+            var theme = s.ThemeFiles.Themes.FirstOrDefault(t => string.Equals(t.Id, name, StringComparison.OrdinalIgnoreCase) || string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new ArgumentException(Theming.Themes.TryFind(name) is { } builtIn ? $"'{builtIn.Name}' is built in; only theme files can be deleted." : $"There is no theme file called '{name}'.");
+            s.ThemeFiles.Delete(theme.Id);
+            return theme.Id;
+        });
+        Add("theme folder", "Print the folder theme files are read from.", [F("open", "Open it in the file manager.")], a =>
+        {
+            if (a.Flag("open")) Shell.Open(s.ThemeFiles.Dir);
+            return s.ThemeFiles.Dir;
+        });
+        Add("theme reload", "Re-read the theme files and report any that could not be read.", [], _ =>
+        {
+            s.ThemeFiles.Load();
+            return J(new { themes = s.ThemeFiles.Themes.Select(t => t.Id), problems = s.ThemeFiles.Problems.Select(p => new { file = p.File, problems = p.Problems }) });
+        });
+        Add("theme edit", "Open the theme editor.", [P("name", "Theme to open. Default: the current theme.")], a =>
+        {
+            var name = a.Str("name") is { Length: > 0 } n ? FindTheme(n).Id : null;
+            s.Host.OpenThemeEditor(name);
+            return name ?? Theming.Themes.Find(s.Config.Settings.Theme.Name).Id;
+        });
+        Add("theme help", "Describe the theme file format.", [], _ => Theming.ThemeFile.Reference);
         Add("theme sound", "Play one of the theme's sounds.", [P("event", "event-start, event-end, timer, watch-changed, pull-request or agent-waiting.", true)], a =>
         {
             var e = a.Require("event").Replace("-", "").ToLowerInvariant() switch
@@ -40,6 +95,19 @@ public sealed partial class CommandRegistry
             return s.Sounds.Resolve(e);
         });
     }
+
+    private static JsonNode CaffeineJson(AppServices s)
+    {
+        var st = s.Caffeine.Status;
+        return new JsonObject
+        {
+            ["mode"] = st.Mode.ToString().ToLowerInvariant(), ["holding"] = st.Holding, ["until"] = st.Until?.ToString("s"),
+            ["busy"] = new JsonArray(st.BusyTerminals.Select(b => (JsonNode)b).ToArray()), ["problem"] = st.Problem, ["status"] = st.Describe(DateTime.Now),
+        };
+    }
+
+    private static Theming.ThemeDef FindTheme(string name) => Theming.Themes.TryFind(name)
+        ?? throw new ArgumentException($"Unknown theme '{name}'. Themes: {string.Join(", ", Theming.Themes.All.Select(t => t.Id))}.");
 
     private void AddAppCommands(AppServices s)
     {
@@ -65,6 +133,28 @@ public sealed partial class CommandRegistry
             s.Host.Navigate(page);
             return page;
         });
+        Add("app boss", "Show the boss screen (or hide it again).", [F("off", "Hide it."), F("on", "Show it.")], a =>
+        {
+            s.Host.BossScreen(a.Flag("off") ? false : a.Flag("on") ? true : null);
+            return "ok";
+        });
+        Add("caffeine status", "Is the computer being kept awake, and why.", [], _ => CaffeineJson(s));
+        Add("caffeine on", "Keep the computer awake: until turned off (default), for a while, until a time, or while terminals are busy.",
+            [O("for", "How long: 30m, 1h30m, 2h …"), O("until", "Until a time: 17:30, tomorrow 09:00, +45m …"), F("terminals", "Only while a terminal is running something (and a few minutes after).")], a =>
+        {
+            if (a.Flag("terminals")) s.Caffeine.WhileTerminalsBusy();
+            else if (a.Str("for") is { } d) s.Caffeine.For(TimeParsing.ParseDuration(d));
+            else if (a.Str("until") is { } u)
+            {
+                var when = TimeParsing.ParseDateTime(u);
+                // A bare clock time that has gone by today means tomorrow.
+                if (when <= DateTime.Now && when.Date == DateTime.Today && !u.Contains("today", StringComparison.OrdinalIgnoreCase)) when = when.AddDays(1);
+                s.Caffeine.UntilTime(when);
+            }
+            else s.Caffeine.Indefinite();
+            return CaffeineJson(s);
+        });
+        Add("caffeine off", "Let the computer sleep as usual again.", [], _ => { s.Caffeine.Off(); return CaffeineJson(s); });
         Add("app activate", "Bring the avamux window to the front.", [], _ => { s.Host.Activate(); return "ok"; });
         Add("app quit", "Close avamux.", [], _ => { s.Host.Quit(); return "bye"; });
         Add("app paths", "Show where avamux keeps its data and configuration.", [], _ => new JsonObject

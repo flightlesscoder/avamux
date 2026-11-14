@@ -15,17 +15,20 @@ namespace Avamux.Core.Wiki;
 
 public sealed record WikiNode(string Name, string Path, bool IsFolder, List<WikiNode> Children);
 
-public enum WikiKind { Markdown, Text, Image, Pdf, Audio, Video, Other }
+public enum WikiKind { Markdown, Text, Image, Pdf, Audio, Video, Archive, Other }
 
 /// <summary>A folder of markdown files (and images) under the app's data folder.</summary>
 public sealed partial class WikiService
 {
     private readonly AppPaths _paths;
+    private readonly Func<long> _previewLimit;
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().UseEmojiAndSmiley().Use<HighlightExtension>().Build();
 
-    public WikiService(AppPaths paths)
+    /// <param name="previewLimit">Size in bytes above which a picture, document or recording is only shown after a click. Null or 0 shows everything at once.</param>
+    public WikiService(AppPaths paths, Func<long>? previewLimit = null)
     {
         _paths = paths;
+        _previewLimit = previewLimit ?? (() => 0);
         var home = System.IO.Path.Combine(Root, "Home.md");
         if (!Directory.EnumerateFileSystemEntries(Root).Any())
             File.WriteAllText(home, "# Home\n\nWelcome to your avamux wiki.\n\n- Pages are markdown files stored in `" + Root + "`.\n- Link to another page with `[Notes](Notes.md)` or `[[Notes]]`.\n- Put images next to a page and embed them with `![alt](picture.png)`.\n\n| Shortcut | Action |\n|---|---|\n| Ctrl+S | Save |\n");
@@ -33,6 +36,14 @@ public sealed partial class WikiService
 
     public string Root => _paths.WikiDir;
     public event Action? Changed;
+
+    /// <summary>The id the wiki folder goes by as a git repository (see <see cref="Repo"/>).</summary>
+    public const string RepoId = "@wiki";
+    /// <summary>The wiki folder as a repository, for keeping its history in git.</summary>
+    public Repos.RepoEntry Repo => new() { Id = RepoId, Name = "Wiki", Path = Root };
+
+    /// <summary>Says the files changed underneath the wiki (a branch was switched, a commit reverted).</summary>
+    public void NotifyChanged() => Changed?.Invoke();
 
     public string Resolve(string path) => PathSafety.Combine(Root, path);
 
@@ -70,6 +81,7 @@ public sealed partial class WikiService
             ".pdf" => WikiKind.Pdf,
             ".mp3" or ".wav" or ".ogg" or ".oga" or ".flac" or ".m4a" or ".aac" or ".opus" => WikiKind.Audio,
             ".mp4" or ".webm" or ".mov" or ".m4v" or ".ogv" or ".mkv" => WikiKind.Video,
+            ".zip" or ".jar" or ".nupkg" or ".apk" => WikiKind.Archive,
             _ => TextExtensions.Contains(ext) || Syntax.LanguageOf(path) is not null ? WikiKind.Text : WikiKind.Other,
         };
     }
@@ -361,29 +373,114 @@ public sealed partial class WikiService
     /// Preview HTML for a file that is not markdown: a zoomable image, an embedded PDF, an audio or video player,
     /// highlighted text with line numbers, or a note that the default application can open it.
     /// </summary>
+    /// <summary>Shown in place of a big file until the reader asks for it; the real markup waits in a template that the preview page swaps in.</summary>
+    private static string ClickToLoad(string what, long length, string markup) =>
+        $"<div class=\"bigfile\"><p>This {what} is {FormatSize(length)}, so it is not loaded automatically.</p>" +
+        "<button data-load=\"1\">Load preview</button>" +
+        $"<template>{markup}</template></div>";
+
+    private static string FormatSize(long length) =>
+        length < 1024 ? length + " B" : length < 1048576 ? $"{length / 1024.0:0.#} KB" : length < 1073741824 ? $"{length / 1048576.0:0.##} MB" : $"{length / 1073741824.0:0.##} GB";
+
+    private const int MaxTableCells = 40000;
+
+    /// <summary>Comma- or tab-separated text as a table. Quoted fields (with doubled quotes and line breaks inside) are understood.</summary>
+    private static string CsvTable(string text, char separator)
+    {
+        var rows = new List<List<string>>();
+        var row = new List<string>();
+        var field = new StringBuilder();
+        var quoted = false;
+        var cells = 0;
+        bool truncated = false;
+        void EndField() { row.Add(field.ToString()); field.Clear(); }
+        void EndRow() { EndField(); cells += row.Count; rows.Add(row); row = []; }
+        for (var i = 0; i < text.Length && !truncated; i++)
+        {
+            var c = text[i];
+            if (quoted)
+            {
+                if (c == '"') { if (i + 1 < text.Length && text[i + 1] == '"') { field.Append('"'); i++; } else quoted = false; }
+                else field.Append(c);
+            }
+            else if (c == '"' && field.Length == 0) quoted = true;
+            else if (c == separator) EndField();
+            else if (c == '\n') { EndRow(); truncated = cells > MaxTableCells; }
+            else if (c != '\r') field.Append(c);
+        }
+        if (field.Length > 0 || row.Count > 0) EndRow();
+        if (rows.Count == 0) return "<p class=\"dim\">The file is empty.</p>";
+        var width = rows.Max(r => r.Count);
+        var sb = new StringBuilder("<div class=\"tablewrap\"><table class=\"csv\"><thead><tr><th class=\"n\"></th>");
+        for (var c = 0; c < width; c++) sb.Append("<th>").Append(WebUtility.HtmlEncode(c < rows[0].Count ? rows[0][c] : "")).Append("</th>");
+        sb.Append("</tr></thead><tbody>");
+        for (var r = 1; r < rows.Count; r++)
+        {
+            sb.Append("<tr><td class=\"n\">").Append(r).Append("</td>");
+            for (var c = 0; c < width; c++) sb.Append("<td>").Append(WebUtility.HtmlEncode(c < rows[r].Count ? rows[r][c] : "")).Append("</td>");
+            sb.Append("</tr>");
+        }
+        sb.Append("</tbody></table></div>");
+        if (truncated) sb.Append("<p class=\"dim\">Only the first rows are shown. Open the file in its default app to see all of it.</p>");
+        return sb.ToString();
+    }
+
+    private const int MaxArchiveEntries = 1000;
+
+    private string ArchiveListing(string path)
+    {
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(Resolve(path));
+            var entries = zip.Entries.ToList();
+            var files = entries.Where(e => !e.FullName.EndsWith('/')).ToList();
+            var sb = new StringBuilder($"<p class=\"dim\">{files.Count} file{(files.Count == 1 ? "" : "s")}, {FormatSize(files.Sum(e => e.Length))} uncompressed.</p>");
+            sb.Append("<div class=\"tablewrap\"><table class=\"csv\"><thead><tr><th>Name</th><th>Size</th><th>Modified</th></tr></thead><tbody>");
+            foreach (var e in entries.Take(MaxArchiveEntries))
+            {
+                var dir = e.FullName.EndsWith('/');
+                sb.Append("<tr><td>").Append(WebUtility.HtmlEncode(e.FullName)).Append("</td><td class=\"r\">").Append(dir ? "" : FormatSize(e.Length))
+                  .Append("</td><td>").Append(e.LastWriteTime.Year > 1980 ? e.LastWriteTime.ToString("yyyy-MM-dd HH:mm") : "").Append("</td></tr>");
+            }
+            sb.Append("</tbody></table></div>");
+            if (entries.Count > MaxArchiveEntries) sb.Append($"<p class=\"dim\">The first {MaxArchiveEntries:N0} of {entries.Count:N0} entries are listed.</p>");
+            return sb.ToString();
+        }
+        catch (Exception ex) { return $"<p class=\"dim\">Could not read the archive: {WebUtility.HtmlEncode(ex.Message)}</p>"; }
+    }
+
     public string RenderFile(string path, string? text = null)
     {
         var name = System.IO.Path.GetFileName(path);
         var src = Uri.EscapeDataString(name);
         var detail = "";
+        long length = 0;
         try
         {
             var info = new FileInfo(Resolve(path));
-            detail = $"{(info.Length < 1024 ? info.Length + " B" : info.Length < 1048576 ? $"{info.Length / 1024.0:0.#} KB" : $"{info.Length / 1048576.0:0.##} MB")} · {info.LastWriteTime:yyyy-MM-dd HH:mm}";
+            length = info.Length;
+            detail = $"{FormatSize(info.Length)} · {info.LastWriteTime:yyyy-MM-dd HH:mm}";
         }
         catch { }
+        var limit = _previewLimit();
+        var big = limit > 0 && length > limit;
+        string Gate(string what, string markup) => big ? ClickToLoad(what, length, markup) : markup;
         var bar = FileBar(name, detail);
         switch (Kind(path))
         {
-            case WikiKind.Image: return bar + $"<div class=\"imgview\" data-src=\"{src}\"></div>";
-            case WikiKind.Pdf: return bar + $"<iframe class=\"doc\" src=\"{src}\" title=\"{WebUtility.HtmlEncode(name)}\"></iframe>";
-            case WikiKind.Audio: return bar + $"<audio class=\"media\" controls preload=\"metadata\" src=\"{src}\"></audio>";
-            case WikiKind.Video: return bar + $"<video class=\"media\" controls preload=\"metadata\" src=\"{src}\"></video>";
+            case WikiKind.Image: return bar + Gate("picture", $"<div class=\"imgview\" data-src=\"{src}\"></div>");
+            case WikiKind.Pdf: return bar + Gate("document", $"<iframe class=\"doc\" src=\"{src}\" title=\"{WebUtility.HtmlEncode(name)}\"></iframe>");
+            // preload="none": nothing is fetched until play is pressed, however small the file.
+            case WikiKind.Audio: return bar + Gate("recording", $"<audio class=\"media\" controls preload=\"none\" src=\"{src}\"></audio>");
+            case WikiKind.Video: return bar + Gate("video", $"<video class=\"media\" controls preload=\"none\" src=\"{src}\"></video>");
+            case WikiKind.Archive: return bar + ArchiveListing(path);
             case WikiKind.Markdown: return Render(text ?? File.ReadAllText(Resolve(path)));
             case WikiKind.Text:
                 try
                 {
                     if (text is null && new FileInfo(Resolve(path)).Length > MaxEditableBytes) return bar + "<p class=\"dim\">This file is too large to preview here.</p>";
+                    var ext = System.IO.Path.GetExtension(name).ToLowerInvariant();
+                    if (ext is ".csv" or ".tsv") return bar + CsvTable(text ?? File.ReadAllText(Resolve(path)), ext == ".tsv" ? '\t' : ',');
                     var sb = new StringBuilder(bar).Append("<pre class=\"file\"><code>");
                     foreach (var line in Syntax.Highlight(text ?? File.ReadAllText(Resolve(path)), Syntax.LanguageOf(name)))
                     {

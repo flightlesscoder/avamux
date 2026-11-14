@@ -27,6 +27,8 @@ public partial class App : Application
             Log.Info("app", $"avamux starting (pid {Environment.ProcessId}, data {Services.Paths.DataDir})");
             Dispatcher.UIThread.UnhandledException += (_, e) =>
             {
+                // Code typed into C# Interactive that throws later (in an event handler, say) reports there.
+                if (Avamux.Scripting.InteractivePage.TryReport(e.Exception)) { e.Handled = true; return; }
                 // Keep the app alive on UI-thread exceptions, but leave a crash report.
                 var file = Log.WriteCrash(Services.Paths.CrashDir, "UI thread", e.Exception);
                 Log.Error("app", $"Unhandled UI exception (report: {file})", e.Exception);

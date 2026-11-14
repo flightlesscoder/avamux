@@ -41,11 +41,23 @@ public sealed class AppHost(MainWindow window, IClassicDesktopStyleApplicationLi
         else window.Terminals.Select(id);
     });
     public string? SelectedTerminal => window.Terminals.SelectedId;
-    public void Notify(string title, string message) => Ui(() => window.Toast(title, message));
+    public void Notify(string title, string message) => Ui(() =>
+    {
+        window.Toast(title, message);
+        // Only worth the taskbar's attention when none of the app's windows is in front to show the toast.
+        if (App.Services.Config.Settings.Ui.TaskbarAlert && !lifetime.Windows.Any(w => w.IsActive)) TaskbarAlert.Raise(window);
+    });
     public void Quit() => Ui(() => lifetime.Shutdown());
     public void ReloadDashboard() => Ui(() => window.Page<Views.DashboardPage>("dashboard")?.Reload());
     public void OpenDashboardDevTools() => Ui(() => window.Page<Views.DashboardPage>("dashboard")?.OpenDevTools());
     public void OpenWikiPage(string path) => Ui(() => window.Page<Views.WikiPage>("wiki")?.Open(path));
+    public void BossScreen(bool? show) => Ui(() => window.ToggleBoss(show));
+    public void OpenThemeEditor(string? theme) => Ui(() => Views.ThemeEditorWindow.Open(window, theme));
     public void Search(string query) => Ui(() => window.Page<Views.SearchPage>("search")?.Run(query));
-    public void SelectRepository(string? id) => Ui(() => window.Page<Views.RepositoriesPage>("repositories")?.SelectRepo(id));
+    public void SelectRepository(string? id) => Ui(() =>
+    {
+        // The wiki's repository has a screen of its own.
+        if (id == Avamux.Core.Wiki.WikiService.RepoId) Views.WikiGitWindow.Show(window);
+        else window.Page<Views.RepositoriesPage>("repositories")?.SelectRepo(id);
+    });
 }

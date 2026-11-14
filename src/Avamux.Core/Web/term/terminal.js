@@ -188,6 +188,16 @@
     return !!text;
   }
 
+  // The boss key (Settings → Window), written like "Ctrl+Shift+B" or "F12".
+  function isBossKey(ev) {
+    const spec = (opts.bossKey || '').trim().toLowerCase();
+    if (!spec) return false;
+    const parts = spec.split('+').map(p => p.trim());
+    const key = parts.pop();
+    const want = { ctrl: parts.includes('ctrl') || parts.includes('control'), shift: parts.includes('shift'), alt: parts.includes('alt'), meta: parts.includes('meta') || parts.includes('cmd') };
+    return ev.ctrlKey === want.ctrl && ev.shiftKey === want.shift && ev.altKey === want.alt && ev.metaKey === want.meta && ev.key.toLowerCase() === key;
+  }
+
   function onKey(s, ev) {
     if (ev.type !== 'keydown') return true;
     const k = ev.key.toLowerCase();
@@ -196,6 +206,7 @@
     if (copyCombo) { copy(s); ev.preventDefault(); return false; }
     if (pasteCombo) { send(s, { t: 'paste' }); ev.preventDefault(); return false; }
     if (ev.ctrlKey && ev.shiftKey && (k === 't' || k === 'w')) { post({ t: k === 't' ? 'new' : 'close' }); ev.preventDefault(); return false; }
+    if (isBossKey(ev)) { post({ t: 'boss' }); ev.preventDefault(); return false; }
     if (ev.ctrlKey && (ev.key === 'PageUp' || ev.key === 'PageDown')) { post({ t: ev.key === 'PageUp' ? 'prev' : 'next' }); ev.preventDefault(); return false; }
     return true; // everything else (Ctrl+B, Ctrl+C, Alt+…) goes to the program in the terminal
   }
