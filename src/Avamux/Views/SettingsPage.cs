@@ -190,6 +190,9 @@ public sealed class SettingsPage : UserControl, IPage
             if (prefix == "ui") body.Children.Add(_customPages);
         }
         _filterHidden.Add(_themeTiles);
+#if EASTER_EGGS
+        EasterEggs.DriveA.Attach(_find, body, _filterHidden, () => { if (_find.Text?.Length > 0) _find.Text = ""; });
+#endif
         _find.TextChanged += (_, _) => _filterSoon();
         _find.KeyDown += (_, e) => { if (e.Key == Key.Escape && _find.Text?.Length > 0) { e.Handled = true; _find.Text = ""; } };
 
