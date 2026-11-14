@@ -95,7 +95,7 @@ public sealed class WebServer : IAsyncDisposable
         return new JsonObject
         {
             ["scrollback"] = t.Scrollback, ["fontFamily"] = t.FontFamily, ["fontSize"] = t.FontSize, ["cursorBlink"] = t.CursorBlink,
-            ["copyOnSelect"] = t.CopyOnSelect,
+            ["copyOnSelect"] = t.CopyOnSelect, ["bossKey"] = _app.Config.Settings.Ui.BossKey,
             ["pulse"] = t.CursorPulse, ["pulseShape"] = t.CursorPulseShape is "outline" or "bar" ? t.CursorPulseShape : "block",
             ["pulseColor"] = Theming.Rgb.TryParse(t.CursorPulseColor, out var pulse) ? pulse.Hex : theme["accent"],
             ["crt"] = t.Crt, ["crtIntensity"] = Math.Clamp(t.CrtIntensity, 0, 100), ["crtFlicker"] = t.CrtFlicker,

@@ -141,7 +141,7 @@ public sealed class EventsPage : UserControl, IPage
             var cell = new StackPanel { Spacing = 2 };
             var number = new TextBlock { Text = day.Day.ToString(), FontSize = 12, Foreground = day == DateTime.Today ? Ui.OnAccent : inMonth ? Ui.Tk("textSoft") : Ui.Tk("ghost"), FontWeight = day == DateTime.Today ? FontWeight.Bold : FontWeight.Normal };
             cell.Children.Add(day == DateTime.Today
-                ? new Border { Background = Ui.Tk("accent"), CornerRadius = Ui.R(9), Padding = new Thickness(6, 0), HorizontalAlignment = HorizontalAlignment.Left, Child = number }
+                ? new Border { Background = Ui.Tk("accent"), CornerRadius = Ui.R(9), Padding = new Thickness(6, 0), HorizontalAlignment = HorizontalAlignment.Left, Child = number, Classes = { "glow" } }
                 : number);
             foreach (var (item, occ, count) in todays.Take(3))
             {
@@ -169,6 +169,7 @@ public sealed class EventsPage : UserControl, IPage
                 BorderBrush = day == _selectedDay ? Ui.Tk("accent") : Ui.Line, BorderThickness = new Thickness(1), CornerRadius = Ui.R(4),
                 Margin = new Thickness(2), Padding = new Thickness(5, 3), Child = cell, ClipToBounds = true, MinHeight = 56,
             };
+            if (day == _selectedDay) border.Classes.Add("glow");
             border.PointerPressed += (_, e) =>
             {
                 if (e.Handled) return;

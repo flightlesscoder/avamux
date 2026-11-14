@@ -11,6 +11,14 @@ public sealed record ThemeDef(string Id, string Name, string Description, bool L
 {
     public string this[string token] => Colors.TryGetValue(token, out var c) ? c : Themes.Simple.Colors[token];
 
+    /// <summary>The file the theme was loaded from; null for the themes built into avamux.</summary>
+    public string? File { get; init; }
+
+    /// <summary>Everything that affects how the theme looks, so two themes can be compared cheaply.</summary>
+    public string Fingerprint() =>
+        string.Join(",", Themes.Simple.Colors.Keys.Select(k => this[k])) + "|" + string.Join(",", Ansi) +
+        $"|{Light}|{Radius.ToString(CultureInfo.InvariantCulture)}|{Chrome}|{SoundSet}|{Bevel}|{Font}";
+
     /// <summary>The same theme with its accent family (accent, links, selection) rebuilt from one colour.</summary>
     public ThemeDef WithAccent(string? hex)
     {
@@ -98,27 +106,38 @@ public static class Themes
             "#555555", "#ff5555", "#55ff55", "#ffff55", "#5555ff", "#ff55ff", "#55ffff", "#ffffff",
         ], 0, "custom", "retro", Bevel: true, Font: "Liberation Sans, Arimo, Arial, Tahoma, DejaVu Sans");
 
-    /// <summary>Builds a dark theme from a terminal palette (background, foreground, 16 ANSI colours) and an accent.</summary>
-    private static ThemeDef FromTerminal(string id, string name, string description, string bg, string fg, string accent, string link, string[] ansi, string sounds = "synth")
+    private static ThemeDef FromTerminal(string id, string name, string description, string bg, string fg, string accent, string link, string[] ansi, string sounds = "synth") =>
+        Derive(id, name, description, bg, fg, accent, link, ansi) with { SoundSet = sounds };
+
+    /// <summary>
+    /// Builds a whole theme from a terminal palette: background, foreground, an accent, a link colour and the 16
+    /// ANSI colours. Surfaces, lines and text shades are mixed between background and foreground; status colours
+    /// come from the ANSI ones. Works for light backgrounds as well as dark ones.
+    /// </summary>
+    public static ThemeDef Derive(string id, string name, string description, string bg, string fg, string accent, string? link, string[] ansi)
     {
+        if (ansi.Length < 16) ansi = [.. ansi, .. SimpleAnsi.Skip(ansi.Length)];
+        link = string.IsNullOrWhiteSpace(link) ? accent : link;
         var (b, f, a) = (Rgb.Parse(bg), Rgb.Parse(fg), Rgb.Parse(accent));
+        var light = b.Luminance > 0.5;
+        var deep = light ? b.Mix(Rgb.Black, 0.06) : b.Mix(Rgb.Black, 0.25);
         string M(double t) => b.Mix(f, t).Hex;
         string Tint(string colour, double t) => b.Mix(Rgb.Parse(colour), t).Hex;
-        return new ThemeDef(id, name, description, false, new Dictionary<string, string>
+        return new ThemeDef(id, name, description, light, new Dictionary<string, string>
         {
-            ["bg"] = M(0.035), ["bgDeep"] = b.Mix(Rgb.Black, 0.25).Hex, ["bgEditor"] = bg, ["bgSide"] = M(0.02),
+            ["bg"] = M(0.035), ["bgDeep"] = deep.Hex, ["bgEditor"] = bg, ["bgSide"] = M(0.02),
             ["panel"] = M(0.08), ["panelHi"] = M(0.16), ["cell"] = M(0.055), ["cellSel"] = Tint(accent, 0.2),
             ["line"] = M(0.17), ["lineSoft"] = M(0.11), ["lineStrong"] = M(0.32), ["scroll"] = M(0.26),
-            ["text"] = fg, ["textStrong"] = "#ffffff", ["textSoft"] = M(0.82), ["textMute"] = M(0.72), ["textCode"] = M(0.9),
+            ["text"] = fg, ["textStrong"] = light ? f.Mix(Rgb.Black, 0.6).Hex : "#ffffff", ["textSoft"] = M(0.82), ["textMute"] = M(0.72), ["textCode"] = M(0.9),
             ["dim"] = M(0.58), ["faint"] = M(0.44), ["ghost"] = M(0.3),
-            ["accent"] = accent, ["link"] = link, ["linkHi"] = Rgb.Parse(link).Mix(Rgb.White, 0.4).Hex, ["accentDeep"] = a.Mix(b, 0.35).Hex,
-            ["onAccent"] = b.Mix(Rgb.Black, 0.2).Hex,
+            ["accent"] = accent, ["link"] = link, ["linkHi"] = Rgb.Parse(link).Mix(light ? Rgb.Black : Rgb.White, 0.4).Hex, ["accentDeep"] = a.Mix(b, 0.35).Hex,
+            ["onAccent"] = !light ? b.Mix(Rgb.Black, 0.2).Hex : a.Luminance > 0.45 ? "#11131a" : "#ffffff",
             ["ok"] = ansi[2], ["okHi"] = ansi[10], ["warn"] = ansi[3], ["error"] = ansi[1], ["errorHi"] = ansi[9], ["errorText"] = ansi[9],
             ["purple"] = ansi[13], ["cyan"] = ansi[6], ["orange"] = Rgb.Parse(ansi[3]).Mix(Rgb.Parse(ansi[1]), 0.4).Hex,
             ["addBg"] = Tint(ansi[2], 0.14), ["delBg"] = Tint(ansi[1], 0.18), ["hunkBg"] = Tint(ansi[4], 0.14),
             ["termBg"] = bg, ["termFg"] = fg, ["termSel"] = a.Mix(b, 0.45).Hex,
-            ["titleBg"] = b.Mix(Rgb.Black, 0.25).Hex, ["titleFg"] = fg,
-        }, ansi, 8, "system", sounds);
+            ["titleBg"] = deep.Hex, ["titleFg"] = fg,
+        }, ansi, 8, "system", light ? "soft" : "synth");
     }
 
     // Palettes below come from the kitty themes in the terminal-stuff repository.
@@ -138,17 +157,47 @@ public static class Themes
         "#241521", "#f7e7e0", "#e8a0bf", "#f0c987",
         ["#2e1a28", "#d16b8f", "#a3c9a8", "#f0c987", "#b599c7", "#d68fc9", "#9fd4d0", "#f7e7e0", "#5c3a52", "#eb93b3", "#c3e0c6", "#f7dca8", "#d1b8e0", "#eab8e0", "#c2e8e5", "#ffffff"], "soft");
 
-    public static readonly IReadOnlyList<ThemeDef> All = [Simple, Classic90s, SynthwaveKat, HotPinkNeon, MiamiRetro, RoseGoldSoft];
+    /// <summary>The themes that ship with avamux.</summary>
+    public static readonly IReadOnlyList<ThemeDef> Builtin = [Simple, Classic90s, SynthwaveKat, HotPinkNeon, MiamiRetro, RoseGoldSoft];
+
+    private static IReadOnlyList<ThemeDef> _all = Builtin;
+
+    /// <summary>Every theme on offer: the built-in ones, then the theme files. A file with a built-in theme's id replaces it.</summary>
+    public static IReadOnlyList<ThemeDef> All => _all;
+
+    /// <summary>Raised when the list of themes changes (theme files were added, edited or removed).</summary>
+    public static event Action? ListChanged;
+
+    /// <summary>Publishes the themes loaded from files; called by the running app's <see cref="ThemeStore"/>.</summary>
+    public static void SetFileThemes(IEnumerable<ThemeDef> files)
+    {
+        var list = files.ToList();
+        var merged = Builtin.Select(b => list.FirstOrDefault(f => string.Equals(f.Id, b.Id, StringComparison.OrdinalIgnoreCase)) ?? b).ToList();
+        merged.AddRange(list.Where(f => !Builtin.Any(b => string.Equals(b.Id, f.Id, StringComparison.OrdinalIgnoreCase))));
+        _all = merged;
+        ListChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// A theme being tried out in the theme editor. While set it is what <see cref="Resolve"/> returns, so every
+    /// part of the app (terminals and web pages included) shows it; nothing is saved.
+    /// </summary>
+    public static ThemeDef? Preview { get; set; }
+
+    public static bool IsBuiltinId(string? id) => Builtin.Any(b => string.Equals(b.Id, id, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Accent colours offered as one-click choices.</summary>
     public static readonly string[] AccentPresets =
         ["#61afef", "#f25cf5", "#ff2fd4", "#ff0080", "#ff6ec7", "#e8a0bf", "#c678dd", "#00f0ff", "#40c9ff", "#2de8b0", "#98c379", "#e5c07b", "#ffb86c", "#e06c75", "#000080", "#008080"];
 
-    public static ThemeDef Find(string? idOrName) =>
-        All.FirstOrDefault(t => string.Equals(t.Id, idOrName, StringComparison.OrdinalIgnoreCase) || string.Equals(t.Name, idOrName, StringComparison.OrdinalIgnoreCase)) ?? Simple;
+    public static ThemeDef Find(string? idOrName) => TryFind(idOrName) ?? Simple;
 
-    /// <summary>The theme the settings ask for, with the accent override applied.</summary>
-    public static ThemeDef Resolve(Config.ThemeSettings s) => Find(s.Name).WithAccent(s.Accent);
+    public static ThemeDef? TryFind(string? idOrName) =>
+        All.FirstOrDefault(t => string.Equals(t.Id, idOrName, StringComparison.OrdinalIgnoreCase)) ??
+        All.FirstOrDefault(t => string.Equals(t.Name, idOrName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The theme the settings ask for, with the accent override applied (or the editor's preview, while there is one).</summary>
+    public static ThemeDef Resolve(Config.ThemeSettings s) => Preview ?? Find(s.Name).WithAccent(s.Accent);
 
     public static bool CustomChrome(Config.ThemeSettings s, ThemeDef theme) => s.WindowChrome.Trim().ToLowerInvariant() switch
     {

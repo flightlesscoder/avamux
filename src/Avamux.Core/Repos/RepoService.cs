@@ -41,6 +41,36 @@ public sealed record RepoCommitFile(string Status, string Path, string? Original
 
 public sealed record RepoCommitInfo(string Hash, string ShortHash, string Author, string Email, string Date, string Subject, string Body);
 
+/// <summary>What git is in the middle of, when it stopped for conflicts.</summary>
+public enum MergeOp { None, Merge, Rebase, CherryPick, Revert }
+
+/// <summary>
+/// Whether a repository is in the middle of a merge (or rebase, cherry-pick, revert), which files still conflict,
+/// and what to call the two sides. "Ours" is what git keeps as stage 2: the branch being merged into, or during a
+/// rebase the branch being rebased onto. "Theirs" is stage 3: what is being brought in.
+/// </summary>
+public sealed record MergeState(MergeOp Op, string OursLabel, string TheirsLabel, IReadOnlyList<string> Conflicts)
+{
+    public static readonly MergeState None = new(MergeOp.None, "HEAD", "incoming", []);
+    public bool InProgress => Op != MergeOp.None;
+    /// <summary>True when there is something for the merge tool to do or to finish.</summary>
+    public bool Active => InProgress || Conflicts.Count > 0;
+    public string Verb => Op switch { MergeOp.Rebase => "rebase", MergeOp.CherryPick => "cherry-pick", MergeOp.Revert => "revert", _ => "merge" };
+    public string Title => Op switch
+    {
+        MergeOp.Merge => $"Merging {TheirsLabel} into {OursLabel}", MergeOp.Rebase => $"Rebasing {TheirsLabel} onto {OursLabel}",
+        MergeOp.CherryPick => $"Cherry-picking {TheirsLabel} onto {OursLabel}", MergeOp.Revert => $"Reverting {TheirsLabel} on {OursLabel}",
+        _ => "Unresolved conflicts",
+    };
+}
+
+/// <summary>The three versions git keeps of a conflicted file. A side is null where the file does not exist on it.</summary>
+public sealed record ConflictFile(string Path, string? Base, string? Ours, string? Theirs, bool Binary)
+{
+    /// <summary>True when both sides have text that can be merged line by line.</summary>
+    public bool Mergeable => !Binary && Ours is not null && Theirs is not null;
+}
+
 /// <summary>Configured git repositories, inspected through the git command line.</summary>
 public sealed class RepoService
 {
@@ -48,6 +78,7 @@ public sealed class RepoService
     private readonly ConfigService _config;
     private readonly object _gate = new();
     private RepoState _state;
+    private readonly List<RepoEntry> _builtIn = [];
 
     public RepoService(AppPaths paths, ConfigService config)
     {
@@ -63,7 +94,60 @@ public sealed class RepoService
         lock (_gate)
             return _state.Items.FirstOrDefault(r => r.Id == idOrName)
                 ?? _state.Items.FirstOrDefault(r => string.Equals(r.Name, idOrName, StringComparison.OrdinalIgnoreCase))
-                ?? _state.Items.FirstOrDefault(r => r.Path == System.IO.Path.GetFullPath(idOrName));
+                ?? _state.Items.FirstOrDefault(r => r.Path == System.IO.Path.GetFullPath(idOrName))
+                ?? _builtIn.FirstOrDefault(r => r.Id == idOrName)
+                ?? _builtIn.FirstOrDefault(r => string.Equals(r.Name, idOrName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Makes a folder avamux itself owns (the wiki) known by id and name, so everything that works on a
+    /// repository works on it, without it appearing in the user's list of repositories.
+    /// </summary>
+    public void AddBuiltIn(RepoEntry repo) { lock (_gate) { _builtIn.RemoveAll(r => r.Id == repo.Id); _builtIn.Add(repo); } }
+
+    /// <summary>True when the folder is the top of a git repository of its own (not merely somewhere inside one).</summary>
+    public async Task<bool> IsRepositoryAsync(RepoEntry repo)
+    {
+        if (!Directory.Exists(repo.Path)) return false;
+        var r = await GitAsync(repo.Path, "rev-parse", "--show-toplevel");
+        return r.ExitCode == 0 && SamePath(r.Stdout.Trim(), repo.Path);
+    }
+
+    private static bool SamePath(string a, string b)
+    {
+        static string Real(string p)
+        {
+            p = System.IO.Path.GetFullPath(p);
+            try { return (Directory.ResolveLinkTarget(p, true)?.FullName ?? p).TrimEnd('/'); } catch { return p.TrimEnd('/'); }
+        }
+        return a.TrimEnd('/') == b.TrimEnd('/') || Real(a) == Real(b) || System.IO.Path.GetFullPath(a).TrimEnd('/') == System.IO.Path.GetFullPath(b).TrimEnd('/');
+    }
+
+    /// <summary>Makes the folder a git repository. Nothing is committed.</summary>
+    public async Task InitAsync(RepoEntry repo)
+    {
+        Directory.CreateDirectory(repo.Path);
+        Check(await GitAsync(repo.Path, "init"));
+    }
+
+    /// <summary>The commits that changed one file, newest first, following it through renames.</summary>
+    public async Task<IReadOnlyList<RepoCommit>> FileLogAsync(RepoEntry repo, string path, int count = 200)
+    {
+        var r = await GitAsync(repo.Path, "log", "--follow", "-n", count.ToString(), "--pretty=format:%h%x1f%an%x1f%ad%x1f%s", "--date=format:%Y-%m-%d %H:%M", "--", path);
+        if (r.ExitCode != 0) return [];
+        return r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Split('\x1f')).Where(p => p.Length == 4)
+            .Select(p => new RepoCommit(p[0], p[1], p[2], p[3])).ToList();
+    }
+
+    /// <summary>Puts a file back the way it was in a commit, in the working tree and the index. Nothing is committed.</summary>
+    public async Task RestoreFileAsync(RepoEntry repo, string path, string commit) =>
+        Check(await GitAsync(repo.Path, "checkout", Rev(commit), "--", path));
+
+    /// <summary>A file's text as it was in a commit. Null when the commit does not have it.</summary>
+    public async Task<string?> FileAtAsync(RepoEntry repo, string path, string commit)
+    {
+        var r = await GitAsync(repo.Path, "show", $"{Rev(commit)}:{path}");
+        return r.ExitCode == 0 ? r.Stdout : null;
     }
 
     public RepoEntry Get(string idOrName) => Find(idOrName) ?? throw new KeyNotFoundException($"No repository '{idOrName}'.");
@@ -329,6 +413,117 @@ public sealed class RepoService
     public async Task FetchAsync(RepoEntry repo) => Check(await GitAsync(repo.Path, 120, "fetch", "--all", "--prune"));
     public async Task PullAsync(RepoEntry repo) => Check(await GitAsync(repo.Path, 180, "pull", "--ff-only"));
     public async Task PushAsync(RepoEntry repo) => Check(await GitAsync(repo.Path, 180, "push"));
+
+    // ---- merging ----
+
+    private readonly Dictionary<string, string> _gitDirs = [];
+
+    private async Task<string?> GitDirAsync(RepoEntry repo)
+    {
+        lock (_gate) if (_gitDirs.TryGetValue(repo.Path, out var known) && Directory.Exists(known)) return known;
+        var r = await GitAsync(repo.Path, "rev-parse", "--absolute-git-dir");
+        var dir = r.ExitCode == 0 ? r.Stdout.Trim() : null;
+        if (dir is not null) lock (_gate) _gitDirs[repo.Path] = dir;
+        return dir;
+    }
+
+    /// <summary>What git is in the middle of in a repository, and which files conflict.</summary>
+    public async Task<MergeState> MergeStateAsync(RepoEntry repo)
+    {
+        try
+        {
+            if (await GitDirAsync(repo) is not { } dir) return MergeState.None;
+            string? Read(string name) { try { var f = System.IO.Path.Combine(dir, name); return File.Exists(f) ? File.ReadAllText(f).Trim() : null; } catch { return null; } }
+            static string Short(string? hash) => hash is { Length: > 8 } ? hash[..8] : hash ?? "?";
+            static string Branch(string? name) => name is null ? "?" : name.StartsWith("refs/heads/", StringComparison.Ordinal) ? name[11..] : name;
+
+            var rebaseDir = Directory.Exists(System.IO.Path.Combine(dir, "rebase-merge")) ? "rebase-merge" : Directory.Exists(System.IO.Path.Combine(dir, "rebase-apply")) ? "rebase-apply" : null;
+            var op = rebaseDir is not null ? MergeOp.Rebase : Read("MERGE_HEAD") is not null ? MergeOp.Merge
+                : Read("CHERRY_PICK_HEAD") is not null ? MergeOp.CherryPick : Read("REVERT_HEAD") is not null ? MergeOp.Revert : MergeOp.None;
+
+            var unmerged = await GitAsync(repo.Path, "diff", "--name-only", "--diff-filter=U", "-z");
+            var conflicts = unmerged.ExitCode == 0 ? unmerged.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries).Distinct().ToList() : [];
+            if (op == MergeOp.None) return conflicts.Count == 0 ? MergeState.None : MergeState.None with { Conflicts = conflicts };
+
+            var head = await CurrentBranchAsync(repo);
+            if (head is null) { var h = await GitAsync(repo.Path, "rev-parse", "--short", "HEAD"); head = h.ExitCode == 0 ? h.Stdout.Trim() : "HEAD"; }
+            string ours = head, theirs;
+            switch (op)
+            {
+                case MergeOp.Merge:
+                    // "Merge branch 'x' into y", "Merge remote-tracking branch 'origin/x'", "Merge commit 'abc'".
+                    var msg = Read("MERGE_MSG") ?? "";
+                    int q1 = msg.IndexOf('\''), q2 = q1 < 0 ? -1 : msg.IndexOf('\'', q1 + 1);
+                    theirs = q2 > q1 && msg.StartsWith("Merge", StringComparison.Ordinal) ? msg[(q1 + 1)..q2] : Short(Read("MERGE_HEAD"));
+                    break;
+                case MergeOp.Rebase:
+                    // While rebasing, git's "ours" is the branch being built on and "theirs" the commit being replayed.
+                    ours = Short(Read(rebaseDir + "/onto"));
+                    theirs = Branch(Read(rebaseDir + "/head-name"));
+                    if (theirs is "?" or "detached HEAD") theirs = Short(Read(rebaseDir + "/orig-head") ?? Read("ORIG_HEAD"));
+                    break;
+                case MergeOp.CherryPick: theirs = Short(Read("CHERRY_PICK_HEAD")); break;
+                default: theirs = Short(Read("REVERT_HEAD")); break;
+            }
+            return new MergeState(op, ours, theirs, conflicts);
+        }
+        catch (Exception ex) { Logging.Log.Debug("repos", "Could not read the merge state: " + ex.Message); return MergeState.None; }
+    }
+
+    /// <summary>The common ancestor's, our and their version of a conflicted file, as git has them in its index.</summary>
+    public async Task<ConflictFile> ConflictAsync(RepoEntry repo, string path)
+    {
+        const int limit = 4 * 1024 * 1024;
+        var binary = false;
+        async Task<string?> Stage(int n)
+        {
+            var r = await GitAsync(repo.Path, "show", $":{n}:{path}");
+            if (r.ExitCode != 0) return null;
+            if (r.Stdout.Length > limit || r.Stdout.AsSpan(0, Math.Min(r.Stdout.Length, 8000)).Contains('\0')) binary = true;
+            return r.Stdout;
+        }
+        var (b, o, t) = (await Stage(1), await Stage(2), await Stage(3));
+        return new ConflictFile(path, b, o, t, binary);
+    }
+
+    /// <summary>Writes the merged text of a conflicted file and tells git the conflict is settled.</summary>
+    public async Task ResolveAsync(RepoEntry repo, string path, string text)
+    {
+        var full = PathSafety.Combine(repo.Path, path);
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
+        await File.WriteAllTextAsync(full, text, new System.Text.UTF8Encoding(false));
+        Check(await GitAsync(repo.Path, "add", "--", path));
+    }
+
+    /// <summary>Settles a conflicted file with one side's whole version. Where that side deleted the file, it is deleted.</summary>
+    public async Task ResolveWithSideAsync(RepoEntry repo, string path, bool theirs)
+    {
+        var r = await GitAsync(repo.Path, "checkout", theirs ? "--theirs" : "--ours", "--", path);
+        Check(r.ExitCode == 0 ? await GitAsync(repo.Path, "add", "--", path) : await GitAsync(repo.Path, "rm", "-q", "--", path));
+    }
+
+    /// <summary>Carries on with the merge, rebase, cherry-pick or revert once its conflicts are settled, and reports where that leaves things.</summary>
+    public async Task<MergeState> ContinueMergeAsync(RepoEntry repo)
+    {
+        var state = await MergeStateAsync(repo);
+        if (!state.InProgress) return state;
+        if (state.Conflicts.Count > 0) throw new InvalidOperationException($"{state.Conflicts.Count} file{(state.Conflicts.Count == 1 ? " still has" : "s still have")} conflicts.");
+        // The message git prepared is used as it is: no editor is opened.
+        var r = await GitAsync(repo.Path, 120, "-c", "core.editor=true", state.Verb, "--continue");
+        var after = await MergeStateAsync(repo);
+        Changed?.Invoke();
+        // A rebase that stops at its next commit's conflicts has not failed.
+        if (r.ExitCode != 0 && after.Conflicts.Count == 0) throw new InvalidOperationException((r.Stderr.Trim().Length > 0 ? r.Stderr : r.Stdout).Trim());
+        return after;
+    }
+
+    /// <summary>Gives up the merge, rebase, cherry-pick or revert and puts the repository back where it was before.</summary>
+    public async Task AbortMergeAsync(RepoEntry repo)
+    {
+        var state = await MergeStateAsync(repo);
+        if (!state.InProgress) throw new InvalidOperationException("Nothing is in progress to abort.");
+        Check(await GitAsync(repo.Path, 60, state.Verb, "--abort"));
+    }
 
     // ---- commits ----
 

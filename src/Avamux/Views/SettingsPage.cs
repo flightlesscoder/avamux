@@ -52,6 +52,9 @@ public sealed class SettingsPage : UserControl, IPage
         ["theme.name"] = ("Theme", "Colours, shapes and sounds of the whole window."),
         ["theme.accent"] = ("Accent colour", "Empty uses the theme's own accent."),
         ["theme.windowChrome"] = ("Window chrome", "auto lets the theme decide; system uses the desktop's title bar; custom draws a title bar in the theme's colours."),
+        ["theme.glow"] = ("Neon glow", "A glowing edge around whatever is selected or current: list and tree selections, the active navigation button and tab, today in the calendar, the current terminal tab."),
+        ["theme.glowIntensity"] = ("Glow strength", "0 to 100."),
+        ["theme.glowColor"] = ("Glow colour", "Empty follows the theme's accent."),
         ["theme.sounds"] = ("Sounds", "Play a sound when something happens."),
         ["theme.soundVolume"] = ("Sound volume", "How loud every theme sound plays, including the previews below. 0 is silent."),
         ["theme.soundSet"] = ("Sound set", "theme uses the sounds that belong to the theme."),
@@ -82,6 +85,12 @@ public sealed class SettingsPage : UserControl, IPage
         ["repositories.editor"] = ("Editor", "Program used for \"Edit\" in Repositories, e.g. nvim or vim."),
         ["repositories.logCount"] = ("Commits shown", "How many recent commits the history lists."),
         ["ui.startPage"] = ("Start page", "Page shown when avamux starts."),
+        ["ui.taskbarAlert"] = ("Taskbar alerts", "Flash or badge the taskbar icon when something needs attention while avamux is in the background."),
+        ["ui.bossKey"] = ("Boss key", "Swaps the window for the boss screen and back (Esc also brings avamux back). Written like Ctrl+Shift+B or F12; empty turns it off."),
+        ["ui.bossScreen"] = ("Boss screen", "What it pretends to be: a budget spreadsheet, or a build that never quite finishes."),
+        ["ui.bossHidesWindows"] = ("Boss screen minimizes other windows", "Also minimize avamux's other windows (detached terminals, the theme editor, …) while it is up."),
+        ["caffeine.graceMinutes"] = ("Minutes awake after terminals finish", "\"While terminals are busy\" keeps the computer awake this long after the last one goes quiet."),
+        ["caffeine.keepDisplayOn"] = ("Keep the screen on", "Stop the screen blanking or locking too, not just the computer sleeping."),
     };
 
     private static readonly Dictionary<string, string[]> Choices = new()
@@ -89,17 +98,18 @@ public sealed class SettingsPage : UserControl, IPage
         ["logs.level"] = ["debug", "info", "warn", "error"],
         ["ui.startPage"] = CommandRegistry.Pages,
         ["ui.navStyle"] = ["standard", "mini"],
+        ["ui.bossScreen"] = BossScreen.Kinds,
         ["theme.name"] = Themes.All.Select(t => t.Id).ToArray(),
         ["theme.windowChrome"] = ["auto", "system", "custom"],
         ["theme.soundSet"] = ["theme", .. SoundService.Sets],
         ["terminal.cursorPulseShape"] = ["block", "outline", "bar"],
     };
 
-    private static bool IsColor(string key) => key is "theme.accent" or "terminal.background" or "terminal.foreground" or "terminal.cursorPulseColor" || key.StartsWith("events.", StringComparison.Ordinal) && key.EndsWith("Color", StringComparison.Ordinal);
+    private static bool IsColor(string key) => key is "theme.accent" or "theme.glowColor" or "terminal.background" or "terminal.foreground" or "terminal.cursorPulseColor" || key.StartsWith("events.", StringComparison.Ordinal) && key.EndsWith("Color", StringComparison.Ordinal);
 
     private static readonly (string Key, string Title)[] Sections =
     [
-        ("ui", "Window"), ("theme", "Themes"), ("terminal", "Terminals"), ("watching", "Watching"), ("events", "Events"), ("wiki", "Wiki"),
+        ("ui", "Window"), ("theme", "Themes"), ("caffeine", "Caffeine"), ("terminal", "Terminals"), ("watching", "Watching"), ("events", "Events"), ("wiki", "Wiki"),
         ("logs", "Logs"), ("dashboard", "Dashboard"), ("repositories", "Repositories"), ("ai", "AI Workloads"),
     ];
 
@@ -110,6 +120,7 @@ public sealed class SettingsPage : UserControl, IPage
     private readonly List<ConfigScope> _scopes = [];
     private readonly Dictionary<string, Control> _rows = new();
     private readonly WrapPanel _themeTiles = new();
+    private readonly StackPanel _themeProblems = new() { Spacing = 2 };
     private readonly ScrollViewer _scroll = new();
     private readonly TextBox _find = new() { PlaceholderText = "Search settings…", FontSize = 14, Padding = new Thickness(12, 8) };
     private readonly TextBlock _findStatus = new() { Foreground = Ui.Dim, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
@@ -156,7 +167,16 @@ public sealed class SettingsPage : UserControl, IPage
         {
             var rows = new StackPanel { Spacing = 12 };
             rows.Children.Add(Ui.Text(title, "h2"));
-            if (prefix == "theme") rows.Children.Add(_themeTiles);
+            if (prefix == "theme")
+            {
+                var tools = Ui.Row(8,
+                    Ui.IconButton(Icons.Palette, "Edit themes and see the changes as you make them", () => ThemeEditorWindow.Open(this), "Theme Editor…"),
+                    Ui.IconButton(Icons.FolderOpen, $"Theme files (.yaml, .json) are read from {App.Services.ThemeFiles.Dir}", () => Shell.Open(App.Services.ThemeFiles.Dir), "Themes Folder"));
+                rows.Children.Add(Ui.Apply(tools, c => _filterHidden.Add(c)));
+                rows.Children.Add(_themeProblems);
+                _filterHidden.Add(_themeProblems);
+                rows.Children.Add(_themeTiles);
+            }
             if (prefix == "ai") rows.Children.Add(Ui.Text("AI Chat and Workloads are placeholders for now. Switch them on to show them in the navigation.", "dim", 12.5));
             foreach (var v in all.Where(v => v.Path.StartsWith(prefix + ".", StringComparison.Ordinal))) rows.Children.Add(_rows[v.Path] = BuildRow(v));
             if (prefix == "theme") rows.Children.Add(Ui.Apply(SoundTests(), c => _filterHidden.Add(c)));
@@ -185,6 +205,7 @@ public sealed class SettingsPage : UserControl, IPage
         };
         _filterSoon = Ui.Debounced(() => _ = ApplyFilterAsync(), 150);
         Config.Changed += Ui.Debounced(Refresh);
+        Themes.ListChanged += Ui.Debounced(Refresh);
         Refresh();
     }
 
@@ -279,9 +300,20 @@ public sealed class SettingsPage : UserControl, IPage
             {
                 Margin = new Thickness(0, 0, 10, 10), Padding = new Thickness(5), CornerRadius = Ui.R(7), Cursor = new Cursor(StandardCursorType.Hand),
                 BorderThickness = new Thickness(2), BorderBrush = selected ? Ui.Tk("accent") : Brushes.Transparent, Background = selected ? Ui.Tk("cellSel") : Brushes.Transparent,
-                Child = Ui.Column(4, sample, new TextBlock { Text = t.Name, FontSize = 12, MaxWidth = 150, TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = selected ? FontWeight.SemiBold : FontWeight.Normal }),
+                Child = Ui.Column(4, sample, new TextBlock { Text = t.Name, FontSize = 12, MaxWidth = 150, TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = selected ? FontWeight.SemiBold : FontWeight.Normal },
+                    new TextBlock { Text = t.File is null ? "built in" : Themes.IsBuiltinId(t.Id) ? "file · replaces built-in" : "file", FontSize = 10.5, Foreground = Ui.Tk("faint") }),
             };
-            ToolTip.SetTip(tile, t.Description);
+            ToolTip.SetTip(tile, string.IsNullOrEmpty(t.Description) ? t.File ?? t.Name : t.Description + (t.File is null ? "" : "\n" + t.File));
+            tile.ContextMenu = new ContextMenu
+            {
+                ItemsSource = new List<MenuItem>
+                {
+                    Ui.Item("Use This Theme", () => Commit("theme.name", t.Id)),
+                    Ui.Item("Edit in Theme Editor…", () => ThemeEditorWindow.Open(this, t.Id), icon: Icons.Palette),
+                    Ui.Item("Show File", () => Shell.ShowInFolder(t.File!), t.File is not null, Icons.FolderOpen),
+                },
+            };
+            if (selected) tile.Classes.Add("glow");
             tile.PointerPressed += (_, _) => Commit("theme.name", t.Id);
             _themeTiles.Children.Add(tile);
         }
@@ -334,9 +366,19 @@ public sealed class SettingsPage : UserControl, IPage
             foreach (var o in options) combo.Items.Add(o);
             combo.SelectionChanged += (_, _) => { if (!_loading && combo.SelectedItem is string s) Commit(key, s); };
             editor = combo;
-            show = v => combo.SelectedItem = options.FirstOrDefault(o => string.Equals(o, v?.ToString(), StringComparison.OrdinalIgnoreCase));
+            show = v =>
+            {
+                // Theme files come and go, so the list of themes is read again each time.
+                if (key == "theme.name" && Themes.All.Select(t => t.Id).ToArray() is var ids && !ids.SequenceEqual(options))
+                {
+                    options = ids;
+                    combo.Items.Clear();
+                    foreach (var o in options) combo.Items.Add(o);
+                }
+                combo.SelectedItem = options.FirstOrDefault(o => string.Equals(o, v?.ToString(), StringComparison.OrdinalIgnoreCase));
+            };
         }
-        else if (key == "theme.soundVolume")
+        else if (key is "theme.soundVolume" or "theme.glowIntensity")
         {
             // A slider that saves once the user pauses, so a drag does not rewrite the config file on every tick.
             var slider = new Slider { Minimum = 0, Maximum = 100, TickFrequency = 5, IsSnapToTickEnabled = true, Width = 260, VerticalAlignment = VerticalAlignment.Center };
@@ -357,7 +399,7 @@ public sealed class SettingsPage : UserControl, IPage
             editor = Ui.Row(10, slider, readout);
             show = v =>
             {
-                var volume = v is JsonValue jv && jv.TryGetValue<int>(out var n) ? n : 70;
+                var volume = v is JsonValue jv && jv.TryGetValue<int>(out var n) ? n : key == "theme.glowIntensity" ? 60 : 70;
                 readout.Text = $"{volume}%";
                 // Do not pull the slider back while a save from a drag is still on its way.
                 if (!pending.IsEnabled) slider.Value = Math.Clamp(volume, 0, 100);
@@ -464,6 +506,13 @@ public sealed class SettingsPage : UserControl, IPage
             foreach (var v in Config.Describe())
                 if (_updaters.TryGetValue(v.Path, out var update)) update(v);
             BuildThemeTiles();
+            _themeProblems.Children.Clear();
+            foreach (var (file, problems) in App.Services.ThemeFiles.Problems)
+                _themeProblems.Children.Add(new TextBlock
+                {
+                    Text = $"⚠ {Path.GetFileName(file)} could not be read: {string.Join(" ", problems.Take(3))}{(problems.Count > 3 ? " …" : "")}",
+                    Foreground = Ui.Tk("warn"), FontSize = 12, TextWrapping = TextWrapping.Wrap,
+                });
             UpdateScopeFile();
             _files.Children.Clear();
             foreach (var scope in _scopes)

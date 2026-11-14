@@ -12,6 +12,7 @@ using Avamux.Core;
 using Avamux.Core.Logging;
 using Avamux.Core.Theming;
 using Avamux.Core.Wiki;
+using AvaloniaEdit;
 
 namespace Avamux.Views;
 
@@ -43,11 +44,13 @@ public sealed class WikiWindow : AppWindow
 public sealed class WikiPage : UserControl, IPage
 {
     private readonly TreeView _tree = new() { Background = Brushes.Transparent };
-    private readonly TextBox _editor = new()
+    private readonly TextEditor _editor = new()
     {
-        AcceptsReturn = true, AcceptsTab = true, TextWrapping = TextWrapping.Wrap, Classes = { "mono", "pane" }, BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0),
-        Padding = new Thickness(14, 10), VerticalContentAlignment = VerticalAlignment.Top,
+        WordWrap = true, FontFamily = Ui.Mono, FontSize = 13, BorderThickness = new Thickness(0),
+        Padding = new Thickness(14, 10), HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
     };
+    private readonly MarkdownColorizer _colorizer = new();
+    private readonly DispatcherTimer _autoSave = new();
     private readonly NativeWebView _preview = new();
     private readonly TextBlock _title = new() { FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly Grid _split = new() { ColumnDefinitions = new ColumnDefinitions("*,*") };
@@ -57,8 +60,11 @@ public sealed class WikiPage : UserControl, IPage
     private readonly HashSet<string> _collapsed = [];
     private readonly bool _standalone;
     private readonly Button[] _modeButtons;
-    private readonly Button _saveButton, _imageButton;
-    private ScrollViewer? _editorScroll;
+    private readonly WikiGitMenu _git;
+    private readonly Button _saveButton, _imageButton, _undoButton, _redoButton, _backButton, _forwardButton;
+    private const int MaxHistory = 50;
+    private readonly List<string> _back = [], _forward = [];   // wiki paths, most recent last
+    private bool _navigating;
     private string? _path;            // wiki-relative path of the open file
     private string? _selectedFolder;  // folder new pages go into
     private string _saved = "";
@@ -69,7 +75,7 @@ public sealed class WikiPage : UserControl, IPage
 
     private static WikiService Wiki => App.Services.Wiki;
     private static UiStateStore State => App.Services.Ui;
-    private bool Dirty => _path is not null && _editable && (_editor.Text ?? "") != _saved;
+    private bool Dirty => _path is not null && _editable && _editor.Text != _saved;
 
     /// <summary>Raised with the wiki path whenever another file is opened.</summary>
     public event Action<string?>? Opened;
@@ -79,24 +85,58 @@ public sealed class WikiPage : UserControl, IPage
     {
         _standalone = standalone is not null;
         _editor.Background = Ui.Tk("bgEditor");
+        _editor.Foreground = Ui.Tk("textCode");
+        _editor.Options.EnableHyperlinks = false;
+        _editor.Options.EnableEmailHyperlinks = false;
+        _editor.Options.HighlightCurrentLine = false;
+        _editor.Options.ConvertTabsToSpaces = true;
+        _editor.TextArea.TextView.LineTransformers.Add(_colorizer);
         _editorHost = new Border { Child = _editor, BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 1, 0) };
         _previewHost = new Border { Child = _preview };
         _split.Children.Add(_editorHost);
         _split.Children.Add(_previewHost.At(0, 1));
 
         _renderSoon = Ui.Debounced(() => _ = RenderAsync(), 200);
-        _editor.TextChanged += (_, _) => { if (!_loading) { UpdateTitle(); _renderSoon(); } };
+        _editor.TextChanged += (_, _) =>
+        {
+            _colorizer.Invalidate();
+            if (_loading) return;
+            UpdateTitle(); UpdateUndoButtons(); _renderSoon(); RestartAutoSave();
+        };
         _editor.KeyDown += (_, e) =>
         {
             if (e.Key == Key.S && (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta))) { e.Handled = true; Save(); }
         };
         // Paste goes through here first: a picture or a copied file becomes a file next to the page plus a link to it.
-        _editor.PastingFromClipboard += (_, e) => { e.Handled = true; _ = PasteAsync(); };
-        _editor.TemplateApplied += (_, e) =>
+        _editor.TextArea.AddHandler(KeyDownEvent, (_, e) =>
         {
-            _editorScroll = e.NameScope.Find<ScrollViewer>("PART_ScrollViewer");
-            if (_editorScroll is not null) _editorScroll.ScrollChanged += (_, _) => { if (!_loading && _path is not null && _editable) State.RememberWiki(_path, editor: _editorScroll.Offset.Y, caret: _editor.CaretIndex); };
+            var paste = e.Key == Key.V && (e.KeyModifiers.HasFlag(KeyModifiers.Control) || e.KeyModifiers.HasFlag(KeyModifiers.Meta)) || e.Key == Key.Insert && e.KeyModifiers == KeyModifiers.Shift;
+            if (!paste || _editor.IsReadOnly) return;
+            e.Handled = true;
+            _ = PasteAsync();
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        _editor.TextArea.TextView.ScrollOffsetChanged += (_, _) =>
+        {
+            if (!_loading && _path is not null && _editable) State.RememberWiki(_path, editor: _editor.VerticalOffset, caret: _editor.CaretOffset);
         };
+        _autoSave.Tick += (_, _) => { _autoSave.Stop(); if (Dirty) Save(); };
+        // Alt+Left / Alt+Right and the mouse's back and forward buttons walk the history.
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.KeyModifiers != KeyModifiers.Alt) return;
+            if (e.Key == Key.Left) { e.Handled = true; GoBack(); }
+            else if (e.Key == Key.Right) { e.Handled = true; GoForward(); }
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        AddHandler(PointerReleasedEvent, (_, e) =>
+        {
+            var kind = e.InitialPressMouseButton;
+            if (kind == MouseButton.XButton1) { e.Handled = true; GoBack(); }
+            else if (kind == MouseButton.XButton2) { e.Handled = true; GoForward(); }
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        // Files dropped anywhere on the page are copied next to it and linked, like a paste.
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnDragOver, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        AddHandler(DragDrop.DropEvent, OnDrop, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         _tree.SelectionChanged += (_, _) =>
         {
             if (_buildingTree || (_tree.SelectedItem as TreeViewItem)?.Tag is not WikiNode node) return;
@@ -119,7 +159,12 @@ public sealed class WikiPage : UserControl, IPage
                 Ui.IconButton(Icons.Delete, "Delete the selected page or folder", () => _ = DeleteAsync(SelectedNode))),
         };
         _modeButtons = new[] { "Edit", "Split", "Preview" }.Select((label, i) => Ui.TextButton(label, () => { _mode = i; ApplyMode(); })).ToArray();
+        _backButton = Ui.IconButton(Icons.ArrowLeft, "Back (Alt+Left)", GoBack);
+        _forwardButton = Ui.IconButton(Icons.ArrowRight, "Forward (Alt+Right)", GoForward);
+        _undoButton = Ui.IconButton(Icons.Undo, "Undo (Ctrl+Z)", () => { _editor.Undo(); _editor.Focus(); }, "Undo");
+        _redoButton = Ui.IconButton(Icons.Redo, "Redo (Ctrl+Y)", () => { _editor.Redo(); _editor.Focus(); }, "Redo");
         _saveButton = Ui.IconButton(Icons.ContentSave, "Save (Ctrl+S)", Save, "Save");
+        _git = new WikiGitMenu(this, () => _path, () => { if (Dirty) Save(); });
         _imageButton = Ui.IconButton(Icons.Image, "Copy a picture or file into the wiki and link it here. Pictures can also be pasted straight into the page.", () => _ = InsertFileAsync(), "Insert");
         var editBar = new Border
         {
@@ -129,9 +174,12 @@ public sealed class WikiPage : UserControl, IPage
                 Children =
                 {
                     Ui.Row(4,
+                        _backButton, _forwardButton,
                         Ui.Row(0, _modeButtons),
+                        _undoButton, _redoButton,
                         _imageButton,
                         _saveButton,
+                        _git.Button,
                         Ui.IconButton(Icons.OpenInNew, _standalone ? "Open this entry in another window" : "Open this entry in a window of its own", () => { if (_path is not null) { if (Dirty) Save(); WikiWindow.Show(_path, this); } }, _standalone ? null : "Window")).Dock(Dock.Right),
                     _title,
                 },
@@ -144,18 +192,23 @@ public sealed class WikiPage : UserControl, IPage
         if (_standalone) { _layout.ColumnDefinitions = new ColumnDefinitions("0,*"); _treeHost.IsVisible = false; }
         Content = _layout;
 
-        var changed = Ui.Debounced(OnWikiChanged, 150);
-        Action theme = () => _ = PushThemeAsync();
+        var changed = Ui.Debounced(() => { OnWikiChanged(); _ = _git.RefreshAsync(); }, 150);
+        // Git moved files underneath the wiki (a branch switch, a revert, a restored version): show what is there now.
+        var gitChanged = Ui.Debounced(() => { OnWikiChanged(fromGit: true); _ = _git.RefreshAsync(); }, 150);
+        App.Services.Repos.Changed += gitChanged;
+        Action theme = () => { _editor.Background = Ui.Tk("bgEditor"); _editor.Foreground = Ui.Tk("textCode"); _editor.TextArea.TextView.Redraw(); _ = PushThemeAsync(); };
         Wiki.Changed += changed;
         Ui.ThemeChanged += theme;
-        if (_standalone) DetachedFromVisualTree += (_, _) => { Wiki.Changed -= changed; Ui.ThemeChanged -= theme; };
+        if (_standalone) DetachedFromVisualTree += (_, _) => { Wiki.Changed -= changed; App.Services.Repos.Changed -= gitChanged; Ui.ThemeChanged -= theme; };
+        _ = _git.RefreshAsync();
 
         ApplyMode();
+        UpdateNavButtons();
         BuildTree();
         Open(standalone ?? Wiki.FindPage("Home") ?? Wiki.Pages().FirstOrDefault(WikiService.IsMarkdown));
     }
 
-    public void OnShown() { BuildTree(); if (_editable && EffectiveMode != 2) _editor.Focus(); }
+    public void OnShown() { BuildTree(); _ = _git.RefreshAsync(); if (_editable && EffectiveMode != 2) _editor.Focus(); }
 
     /// <summary>Saves unsaved edits and the current position; called when the window holding the page closes.</summary>
     public void Leave() { if (Dirty) Save(); RememberPosition(); State.Save(); }
@@ -171,10 +224,28 @@ public sealed class WikiPage : UserControl, IPage
         _split.ColumnDefinitions = new ColumnDefinitions(mode switch { 0 => "*,0", 2 => "0,*", _ => "*,*" });
         _editorHost.IsVisible = mode != 2;
         _previewHost.IsVisible = mode != 0;
-        for (var i = 0; i < _modeButtons.Length; i++) { _modeButtons[i].Opacity = i == mode ? 1 : 0.55; _modeButtons[i].IsEnabled = _editable || i == 2; }
+        for (var i = 0; i < _modeButtons.Length; i++) { _modeButtons[i].Opacity = i == mode ? 1 : 0.55; _modeButtons[i].Classes.Set("glow", i == mode); _modeButtons[i].IsEnabled = _editable || i == 2; }
         _saveButton.IsEnabled = _editable;
+        UpdateUndoButtons();
         _imageButton.IsEnabled = _path is not null && WikiService.IsMarkdown(_path);
         if (mode != 0) _ = RenderAsync();
+    }
+
+    private void UpdateUndoButtons()
+    {
+        var undo = _editor.Document.UndoStack;
+        _undoButton.IsEnabled = _editable && undo.CanUndo;
+        _redoButton.IsEnabled = _editable && undo.CanRedo;
+    }
+
+    /// <summary>(Re)starts the countdown to saving: it runs out only after the configured time without any change.</summary>
+    private void RestartAutoSave()
+    {
+        _autoSave.Stop();
+        var settings = App.Services.Config.Settings.Wiki;
+        if (!settings.AutoSave || !_editable) return;
+        _autoSave.Interval = TimeSpan.FromSeconds(Math.Clamp(settings.AutoSaveSeconds, 0.2, 3600));
+        _autoSave.Start();
     }
 
     private void UpdateTitle() => _title.Text = _path is null ? "No page open" : _path + (Dirty ? "  ●" : "");
@@ -243,7 +314,10 @@ public sealed class WikiPage : UserControl, IPage
     private WikiNode? SelectedNode => (_tree.SelectedItem as TreeViewItem)?.Tag as WikiNode
         ?? (_path is null ? null : new WikiNode(Path.GetFileName(_path), _path, false, []));
 
-    private void OnWikiChanged()
+    private void OnWikiChanged() => OnWikiChanged(false);
+
+    /// <param name="fromGit">The files were changed by git, which this page asked for: nothing of its own to wait out.</param>
+    private void OnWikiChanged(bool fromGit)
     {
         BuildTree();
         if (_path is null) return;
@@ -252,7 +326,7 @@ public sealed class WikiPage : UserControl, IPage
         if (!File.Exists(full)) { _path = null; _editable = false; _loading = true; _editor.Text = ""; _saved = ""; _loading = false; UpdateTitle(); ApplyMode(); return; }
         if (!_editable) { _ = RenderAsync(); return; }
         // Changed from outside (CLI, another editor, another window): pick it up unless there are unsaved edits here.
-        if (Dirty || DateTime.Now - _lastOwnWrite < TimeSpan.FromSeconds(1)) return;
+        if (Dirty || (!fromGit && DateTime.Now - _lastOwnWrite < TimeSpan.FromSeconds(1))) return;
         string disk;
         try { disk = File.ReadAllText(full); } catch { return; }
         if (disk == _saved) return;
@@ -265,8 +339,8 @@ public sealed class WikiPage : UserControl, IPage
 
     private void RememberPosition()
     {
-        if (_path is null || !_editable || _editorScroll is null) return;
-        State.RememberWiki(_path, editor: _editorScroll.Offset.Y, caret: _editor.CaretIndex);
+        if (_path is null || !_editable) return;
+        State.RememberWiki(_path, editor: _editor.VerticalOffset, caret: _editor.CaretOffset);
     }
 
     /// <summary>Opens a wiki file. <paramref name="line"/> (1-based) moves the editor and preview to that line.</summary>
@@ -278,6 +352,12 @@ public sealed class WikiPage : UserControl, IPage
         if (found == _path && line == 0) return;
         if (Dirty) Save();
         RememberPosition();
+        if (!_navigating && _path is not null && found != _path)
+        {
+            // Following a link, picking a page or opening a file starts a new branch: what was ahead is gone.
+            Remember(_back, _path);
+            _forward.Clear();
+        }
         _path = found;
         _selectedFolder = FolderOf(found);
         var remembered = State.WikiPosition(found);
@@ -288,9 +368,8 @@ public sealed class WikiPage : UserControl, IPage
             _saved = _editable ? File.ReadAllText(Wiki.Resolve(found)) : "";
             _editor.Text = _saved;
             _editor.IsReadOnly = !_editable;
-            _editor.PlaceholderText = WikiService.IsMarkdown(found) ? "Write markdown here…" : "";
             var caret = line > 0 ? OffsetOfLine(_saved, line) : Math.Clamp(remembered?.Caret ?? 0, 0, _saved.Length);
-            _editor.CaretIndex = caret;
+            _editor.CaretOffset = caret;
             _pendingPreviewScroll = remembered?.Preview ?? 0;
             var editorOffset = remembered?.Editor ?? 0;
             // The text box lays out after this call; scroll once it has.
@@ -300,8 +379,8 @@ public sealed class WikiPage : UserControl, IPage
                 _loading = true;
                 try
                 {
-                    if (line > 0) { _editor.CaretIndex = caret; _editor.SelectionStart = caret; _editor.SelectionEnd = Math.Min(_saved.Length, EndOfLine(_saved, caret)); }
-                    else if (_editorScroll is not null) _editorScroll.Offset = new Vector(0, editorOffset);
+                    if (line > 0) { _editor.CaretOffset = caret; _editor.Select(caret, Math.Min(_saved.Length, EndOfLine(_saved, caret)) - caret); _editor.ScrollToLine(line); }
+                    else _editor.ScrollToVerticalOffset(editorOffset);
                 }
                 finally { _loading = false; }
             }, DispatcherPriority.Background);
@@ -314,7 +393,44 @@ public sealed class WikiPage : UserControl, IPage
         ApplyMode();
         if (EffectiveMode == 0) _ = RenderAsync();
         if (line > 0 && _saved.Length > 0) _ = ScrollPreviewToAsync(OffsetOfLine(_saved, line) / (double)_saved.Length);
+        UpdateNavButtons();
         Opened?.Invoke(_path);
+    }
+
+    // ---- history ----
+
+    private static void Remember(List<string> list, string path)
+    {
+        if (list.Count > 0 && list[^1] == path) return;
+        list.Add(path);
+        if (list.Count > MaxHistory) list.RemoveAt(0);
+    }
+
+    private void UpdateNavButtons()
+    {
+        _backButton.IsEnabled = _back.Count > 0;
+        _forwardButton.IsEnabled = _forward.Count > 0;
+    }
+
+    private void GoBack() => Walk(_back, _forward);
+    private void GoForward() => Walk(_forward, _back);
+
+    /// <summary>Moves to the newest entry of <paramref name="from"/> that still exists, leaving the current page on <paramref name="to"/>.</summary>
+    private void Walk(List<string> from, List<string> to)
+    {
+        while (from.Count > 0)
+        {
+            var target = from[^1];
+            from.RemoveAt(from.Count - 1);
+            if (Wiki.FindPage(target) is not { } found) continue; // deleted or moved since
+            var here = _path;
+            _navigating = true;
+            try { Open(found); }
+            finally { _navigating = false; }
+            if (here is not null && here != _path) Remember(to, here);
+            break;
+        }
+        UpdateNavButtons();
     }
 
     private static int OffsetOfLine(string text, int line)
@@ -336,7 +452,7 @@ public sealed class WikiPage : UserControl, IPage
         if (_path is null || !_editable) return;
         try
         {
-            var text = _editor.Text ?? "";
+            var text = _editor.Text;
             _lastOwnWrite = DateTime.Now;
             _saved = text;
             Wiki.Write(_path, text);
@@ -371,10 +487,10 @@ public sealed class WikiPage : UserControl, IPage
         try
         {
             if (path is null) html = "<p class=\"dim\">Select or create a page.</p>";
-            else if (WikiService.IsMarkdown(path)) html = WikiService.Render(_editor.Text ?? "");
+            else if (WikiService.IsMarkdown(path)) html = WikiService.Render(_editor.Text);
             else
             {
-                var text = _editable ? _editor.Text ?? "" : null; // read on this thread; rendering happens on another
+                var text = _editable ? _editor.Text : null; // read on this thread; rendering happens on another
                 html = await Task.Run(() => Wiki.RenderFile(path, text));
             }
         }
@@ -453,11 +569,9 @@ public sealed class WikiPage : UserControl, IPage
 
     private void InsertText(string text)
     {
-        var current = _editor.Text ?? "";
-        var start = Math.Clamp(Math.Min(_editor.SelectionStart, _editor.SelectionEnd), 0, current.Length);
-        var end = Math.Clamp(Math.Max(_editor.SelectionStart, _editor.SelectionEnd), 0, current.Length);
-        _editor.Text = current[..start] + text + current[end..];
-        _editor.SelectionStart = _editor.SelectionEnd = _editor.CaretIndex = start + text.Length;
+        // Through the selection so the insert is one undo step and keeps the scroll position.
+        _editor.TextArea.Selection.ReplaceSelectionWithText(text);
+        _editor.Focus();
     }
 
     /// <summary>
@@ -493,6 +607,38 @@ public sealed class WikiPage : UserControl, IPage
             if (top.Clipboard is { } clip && await clip.TryGetTextAsync() is { Length: > 0 } plain) InsertText(plain);
         }
         catch (Exception ex) { Ui.Toast(this, "Could not paste", ex.GetBaseException().Message); }
+    }
+
+    private bool CanTakeFiles => _path is not null && _editable && WikiService.IsMarkdown(_path);
+
+    private static IReadOnlyList<string> DroppedFiles(DragEventArgs e) =>
+        e.DataTransfer.TryGetFiles()?.Select(f => f.TryGetLocalPath()).Where(p => p is not null && File.Exists(p)).Select(p => p!).ToList() ?? [];
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        if (!CanTakeFiles || DroppedFiles(e).Count == 0) return;
+        e.DragEffects = DragDropEffects.Copy;
+        e.Handled = true;
+    }
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        if (!CanTakeFiles) return;
+        var files = DroppedFiles(e);
+        if (files.Count == 0) return;
+        e.Handled = true;
+        // Drop where the pointer is when it is over the text; otherwise at the caret.
+        if (_editorHost.IsVisible && _editor.GetPositionFromPoint(e.GetPosition(_editor)) is { } at)
+            _editor.CaretOffset = _editor.Document.GetOffset(at.Line, at.Column);
+        var added = new List<string>();
+        foreach (var file in files)
+        {
+            try { added.Add(WikiService.LinkMarkdown(Path.GetFileName(Wiki.Import(file, FolderOf(_path!))))); }
+            catch (Exception ex) { Ui.Toast(this, "Could not add " + Path.GetFileName(file), ex.GetBaseException().Message); }
+        }
+        if (added.Count == 0) return;
+        InsertText(string.Join("\n", added));
+        Ui.Toast(this, added.Count == 1 ? "File added" : $"{added.Count} files added", "Copied next to this page and linked.");
     }
 
     private async Task InsertFileAsync()
@@ -543,6 +689,10 @@ public sealed class WikiPage : UserControl, IPage
             if (Dirty) Save();
             var moved = Wiki.Move(node.Path, to.Trim().Trim('/'));
             State.RenameWiki(node.Path, moved);
+            foreach (var list in new[] { _back, _forward })
+                for (var i = 0; i < list.Count; i++)
+                    if (list[i] == node.Path) list[i] = moved;
+                    else if (node.IsFolder && list[i].StartsWith(node.Path + "/", StringComparison.Ordinal)) list[i] = moved + list[i][node.Path.Length..];
             if (_path == node.Path) { _path = moved; UpdateTitle(); Opened?.Invoke(_path); }
             else if (_path is not null && node.IsFolder && _path.StartsWith(node.Path + "/", StringComparison.Ordinal)) { _path = moved + _path[node.Path.Length..]; UpdateTitle(); Opened?.Invoke(_path); }
             BuildTree();
@@ -556,7 +706,7 @@ public sealed class WikiPage : UserControl, IPage
         if (!await Ui.ConfirmAsync(Ui.Owner(this), "Delete", $"Delete {what}?")) return;
         Ui.Try(this, () =>
         {
-            if (_path == node.Path || (node.IsFolder && _path?.StartsWith(node.Path + "/", StringComparison.Ordinal) == true)) { _saved = _editor.Text ?? ""; }
+            if (_path == node.Path || (node.IsFolder && _path?.StartsWith(node.Path + "/", StringComparison.Ordinal) == true)) { _saved = _editor.Text; }
             Wiki.Delete(node.Path);
             State.ForgetWiki(node.Path);
         }, "Could not delete");

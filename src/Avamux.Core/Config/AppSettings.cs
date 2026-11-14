@@ -12,6 +12,7 @@ public sealed class AppSettings
     public WikiSettings Wiki { get; set; } = new();
     public UiSettings Ui { get; set; } = new();
     public ThemeSettings Theme { get; set; } = new();
+    public CaffeineSettings Caffeine { get; set; } = new();
     public AiSettings Ai { get; set; } = new();
 }
 
@@ -117,6 +118,12 @@ public sealed class WikiSettings
     public string DailyNoteTemplate { get; set; } = "# {title}\n\n";
     /// <summary>How many files have their last scroll position remembered.</summary>
     public int RememberedPositions { get; set; } = 500;
+    /// <summary>Save a page automatically once it has not been edited for <see cref="AutoSaveSeconds"/>.</summary>
+    public bool AutoSave { get; set; } = true;
+    /// <summary>Pictures, PDFs, audio and video larger than this many megabytes are previewed only after a click. 0 loads every file at once.</summary>
+    public double ClickToPreviewMegabytes { get; set; } = 20;
+    /// <summary>Seconds without a change before an edited page is saved.</summary>
+    public double AutoSaveSeconds { get; set; } = 2;
 }
 
 public sealed class UiSettings
@@ -124,6 +131,22 @@ public sealed class UiSettings
     public string StartPage { get; set; } = "terminals";
     /// <summary>standard (icons with labels) or mini (small icons with tooltips).</summary>
     public string NavStyle { get; set; } = "standard";
+    /// <summary>Flash or badge the taskbar / dock icon when something needs attention while avamux is in the background.</summary>
+    public bool TaskbarAlert { get; set; } = true;
+    /// <summary>Key that swaps the window for the boss screen and back, e.g. Ctrl+Shift+B. Empty turns it off.</summary>
+    public string BossKey { get; set; } = "Ctrl+Shift+B";
+    /// <summary>What the boss screen pretends to be: spreadsheet or build.</summary>
+    public string BossScreen { get; set; } = "spreadsheet";
+    /// <summary>Minimize avamux's other windows while the boss screen is up.</summary>
+    public bool BossHidesWindows { get; set; } = true;
+}
+
+public sealed class CaffeineSettings
+{
+    /// <summary>"While terminals are busy" keeps the computer awake this many minutes after the last one finishes.</summary>
+    public int GraceMinutes { get; set; } = 5;
+    /// <summary>Keep the screen on too, not just stop the computer sleeping.</summary>
+    public bool KeepDisplayOn { get; set; } = true;
 }
 
 public sealed class ThemeSettings
@@ -133,6 +156,12 @@ public sealed class ThemeSettings
     public string Accent { get; set; } = "";
     /// <summary>auto (the theme decides), system (the desktop's title bar) or custom (drawn by avamux).</summary>
     public string WindowChrome { get; set; } = "auto";
+    /// <summary>A neon glow around whatever is selected or current: list and tree selections, the active navigation button and tab, today in the calendar.</summary>
+    public bool Glow { get; set; }
+    /// <summary>Strength of the glow, 0 to 100.</summary>
+    public int GlowIntensity { get; set; } = 60;
+    /// <summary>Colour of the glow as #rrggbb. Empty follows the theme's accent.</summary>
+    public string GlowColor { get; set; } = "";
     public bool Sounds { get; set; } = true;
     /// <summary>0 to 100.</summary>
     public int SoundVolume { get; set; } = 70;

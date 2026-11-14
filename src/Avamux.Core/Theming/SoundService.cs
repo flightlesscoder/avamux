@@ -39,9 +39,13 @@ public sealed class SoundService(AppPaths paths, ConfigService config)
         SoundEvent.PullRequest => s.SoundOnPullRequest, _ => s.SoundOnAgentWaiting,
     };
 
+    /// <summary>Set while the boss screen is up: nothing should beep.</summary>
+    public bool Quiet { get; set; }
+
     /// <summary>Plays the sound for an event if the settings allow it. <paramref name="force"/> is for "Test" buttons.</summary>
     public void Play(SoundEvent e, bool force = false)
     {
+        if (Quiet && !force) return;
         try
         {
             var s = config.Settings.Theme;

@@ -239,6 +239,7 @@ public sealed class TerminalsPage : UserControl, IPage
                 case "close": if (SelectedId is not null) Manager.Close(SelectedId); break;
                 case "next": Step(1); break;
                 case "prev": Step(-1); break;
+                case "boss": Ui.Main?.ToggleBoss(null); break;
             }
         }
         catch (Exception ex) { Log.Warn("terminal", "Bad message from terminal view: " + ex.Message); }
@@ -347,6 +348,7 @@ public sealed class TerminalsPage : UserControl, IPage
             Background = selected ? Ui.Tk("bgEditor") : Brushes.Transparent,
             BorderBrush = waiting ? Ui.Tk("warn") : selected ? Ui.Tk("accent") : Brushes.Transparent, BorderThickness = new Thickness(0, 2, 0, 0),
         };
+        if (selected) tab.Classes.Add("glow");
         ToolTip.SetTip(tab, $"{s.Process} — {s.Cwd}\n{stateText}" + (s.OscTitle is { Length: > 0 } t ? $"\n{t}" : "") + "\nDouble-click to rename");
         tab.PointerPressed += (_, e) =>
         {

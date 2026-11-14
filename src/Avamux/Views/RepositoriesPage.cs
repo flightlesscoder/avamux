@@ -42,6 +42,8 @@ public sealed class RepositoriesPage : UserControl, IPage
     private sealed record BranchRef(string RepoId, RepoBranch Branch);
     private sealed record PrRef(string RepoId, WatchItem Watch, WatchResultItem Item);
     private sealed record HeaderRef(RepoEntry Repo);
+    /// <summary>The "merge in progress" row of a repository: selecting it shows where the merge stands.</summary>
+    private sealed record MergeRef(string RepoId);
     private sealed record CommitView(RepoEntry Repo, RepoCommitInfo Info, IReadOnlyList<RepoCommitFile> Files);
 
     private readonly ComboBox _picker = new() { MinWidth = 240 };
@@ -58,6 +60,10 @@ public sealed class RepositoriesPage : UserControl, IPage
     private readonly Border _prBar;
     private readonly StackPanel _empty;
     private readonly Grid _main;
+    private readonly MergeView _merge = new() { IsVisible = false };
+    private readonly DockPanel _right;
+    private readonly Border _leftPane;
+    private Dictionary<string, MergeState> _mergeStates = [];
 
     private string? _repoId;     // null = all repositories
     private Tab _tab = Tab.Changes;
@@ -90,8 +96,18 @@ public sealed class RepositoriesPage : UserControl, IPage
     private static WatchService Watches => App.Services.Watches;
     private static UiStateStore State => App.Services.Ui;
 
-    public RepositoriesPage()
+    /// <summary>The one repository this page is for (the wiki's), or null for the user's list of repositories.</summary>
+    private readonly RepoEntry? _pinned;
+    private IReadOnlyList<RepoEntry> AllRepos => _pinned is null ? Repos.Items : [_pinned];
+
+    /// <param name="pinned">
+    /// When given, the page works on this repository alone: no repository list to choose from, add to or remove
+    /// from, and no pull requests. This is how the wiki gets the same changes, history and branches screen.
+    /// </param>
+    public RepositoriesPage(RepoEntry? pinned = null)
     {
+        _pinned = pinned;
+        _repoId = pinned?.Id;
         _picker.ItemTemplate = new FuncDataTemplate<RepoChoice>((c, _) => new TextBlock { Text = c?.Label ?? "", TextTrimming = TextTrimming.CharacterEllipsis }, false);
         _branchPicker.ItemTemplate = new FuncDataTemplate<BranchChoice>((c, _) => new TextBlock { Text = c?.Label ?? "", TextTrimming = TextTrimming.CharacterEllipsis }, false);
         _picker.SelectionChanged += (_, _) =>
@@ -192,7 +208,13 @@ public sealed class RepositoriesPage : UserControl, IPage
                 _list,
             },
         };
-        var right = new DockPanel
+        _merge.Saved = AfterResolved;
+        _merge.StepFile = StepConflict;
+        _merge.ExpandChanged = _ => SizeList();
+        _merge.ContinueMerge = ContinueMergeAsync;
+        _merge.AbortMerge = AbortMergeAsync;
+        _merge.ResolveNext = repo => SelectConflict(repo.Id, null);
+        var right = _right = new DockPanel
         {
             Children =
             {
@@ -218,8 +240,8 @@ public sealed class RepositoriesPage : UserControl, IPage
             ColumnDefinitions = new ColumnDefinitions("500,*"),
             Children =
             {
-                new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 1, 0), Child = left },
-                new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 0, 0), Child = right }.At(0, 1),
+                (_leftPane = new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 1, 0), Child = left }),
+                new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 0, 0), Child = new Panel { Children = { right, _merge } } }.At(0, 1),
             },
         };
         _empty = new StackPanel
@@ -234,19 +256,25 @@ public sealed class RepositoriesPage : UserControl, IPage
         };
 
         ToolTip.SetTip(_branchPicker, "Switch branch");
+        var branchRow = Ui.Row(6, new PathIcon { Data = Icons.SourceBranch, Width = 15, Height = 15, Foreground = Ui.Dim }, _branchPicker);
+        var refresh = Ui.IconButton(Icons.Refresh, "Refresh", () => { _branchSignature = ""; _ = RefreshAsync(); });
         Content = new DockPanel
         {
             Children =
             {
-                Ui.Header("Repositories", "Git changes, history, branches and pull requests for one repository or all of them.",
-                    Ui.Row(6, new PathIcon { Data = Icons.SourceBranch, Width = 15, Height = 15, Foreground = Ui.Dim }, _branchPicker),
-                    _picker,
-                    Ui.IconButton(Icons.Plus, "Add a repository", () => _ = AddAsync(), "Add"),
-                    _remove,
-                    Ui.IconButton(Icons.Refresh, "Refresh", () => { _branchSignature = ""; _ = RefreshAsync(); })).Dock(Dock.Top),
+                (_pinned is null
+                    ? Ui.Header("Repositories", "Git changes, history, branches and pull requests for one repository or all of them.",
+                        branchRow, _picker, Ui.IconButton(Icons.Plus, "Add a repository", () => _ = AddAsync(), "Add"), _remove, refresh)
+                    : Ui.Header($"{_pinned.Name} in git", $"Changes, history and branches of {_pinned.Path}", branchRow, refresh)).Dock(Dock.Top),
                 new Panel { Children = { _main, _empty } },
             },
         };
+        if (_pinned is not null)
+        {
+            _tabs[(int)Tab.PullRequests].IsVisible = false;
+            // Pages saved in the wiki are changes here.
+            if (_pinned.Id == Core.Wiki.WikiService.RepoId) App.Services.Wiki.Changed += Ui.Debounced(() => { if (IsEffectivelyVisible) _ = RefreshAsync(); }, 300);
+        }
         Repos.Changed += Ui.Debounced(() => _ = RefreshAsync());
         Watches.Changed += Ui.Debounced(() => { if (_tab == Tab.PullRequests && IsVisible) _ = RefreshAsync(); }, 250);
         _ = RefreshAsync();
@@ -254,8 +282,17 @@ public sealed class RepositoriesPage : UserControl, IPage
 
     public void OnShown() => _ = RefreshAsync();
 
+    /// <summary>Goes to a tab by name: "changes", "history" or "branches".</summary>
+    public void ShowTab(string name)
+    {
+        if (!Enum.TryParse<Tab>(name, true, out var tab) || (tab == Tab.PullRequests && _pinned is not null)) return;
+        _tab = tab; _view = null; _viewFile = null; _file = null;
+        _ = RefreshAsync();
+    }
+
     public void SelectRepo(string? id)
     {
+        if (_pinned is not null) return;
         _repoId = id;
         ClearSelection();
         _ = RefreshAsync();
@@ -283,6 +320,7 @@ public sealed class RepositoriesPage : UserControl, IPage
         switch (tag)
         {
             case ChangeRef c: _change = c; _file = null; break;
+            case MergeRef: _change = null; _file = null; break;
             case CommitRef c: _commit = c; break;
             case CommitFileRef f: _viewFile = f; break;
             case BranchRef b: _branch = b; break;
@@ -291,10 +329,10 @@ public sealed class RepositoriesPage : UserControl, IPage
     }
 
     private RepoEntry? CurrentRepo =>
-        Repos.Items.FirstOrDefault(r => r.Id == (_view?.Repo.Id ?? (_tab switch
+        AllRepos.FirstOrDefault(r => r.Id == (_view?.Repo.Id ?? (_tab switch
         {
-            Tab.Changes => _file?.RepoId ?? _change?.Change.RepoId, Tab.History => _commit?.RepoId, Tab.Branches => _branch?.RepoId, _ => _pr?.RepoId,
-        }) ?? _repoId)) ?? Repos.Items.FirstOrDefault(r => r.Id == _repoId) ?? (Repos.Items.Count == 1 ? Repos.Items[0] : null);
+            Tab.Changes => _file?.RepoId ?? _change?.Change.RepoId ?? (_lastSelected as MergeRef)?.RepoId, Tab.History => _commit?.RepoId, Tab.Branches => _branch?.RepoId, _ => _pr?.RepoId,
+        }) ?? _repoId)) ?? AllRepos.FirstOrDefault(r => r.Id == _repoId) ?? (AllRepos.Count == 1 ? AllRepos[0] : null);
 
     // ---- look ----
 
@@ -335,9 +373,10 @@ public sealed class RepositoriesPage : UserControl, IPage
     }
 
     /// <param name="collapsed">When set, the header shows a fold arrow and a click on it calls <paramref name="toggle"/>.</param>
-    private ListBoxItem HeaderRow(RepoEntry repo, string detail, string? error, ContextMenu? menu, bool? collapsed = null, Action? toggle = null)
+    private ListBoxItem HeaderRow(RepoEntry repo, string detail, string? error, ContextMenu? menu, bool? collapsed = null, Action? toggle = null, string folds = "its commits", Control? badge = null)
     {
         var title = Ui.Row(8, new TextBlock { Text = repo.Name, FontWeight = FontWeight.SemiBold }, new TextBlock { Text = detail, Foreground = Ui.Dim, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+        if (badge is not null) title.Children.Add(badge);
         if (collapsed is { } folded)
             title.Children.Insert(0, new TextBlock { Text = folded ? "▶" : "▼", Width = 14, FontSize = 10, Foreground = Ui.Dim, VerticalAlignment = VerticalAlignment.Center });
         var content = new Border
@@ -350,7 +389,7 @@ public sealed class RepositoriesPage : UserControl, IPage
         };
         if (toggle is not null)
             content.PointerReleased += (_, e) => { if (e.InitialPressMouseButton == MouseButton.Left) { e.Handled = true; toggle(); } };
-        ToolTip.SetTip(content, repo.Path + (toggle is null ? "" : collapsed == true ? "\nClick to show its commits" : "\nClick to fold its commits away") + "\nRight-click for branch, folder, remote and more");
+        ToolTip.SetTip(content, repo.Path + (toggle is null ? "" : collapsed == true ? $"\nClick to show {folds}" : $"\nClick to fold {folds} away") + "\nRight-click for branch, folder, remote and more");
         return new ListBoxItem { Tag = new HeaderRef(repo), Padding = new Thickness(0), Focusable = false, Content = content, ContextMenu = menu ?? RepoMenu(repo) };
     }
 
@@ -388,7 +427,7 @@ public sealed class RepositoriesPage : UserControl, IPage
     private async Task RefreshCoreAsync()
     {
         var gen = ++_generation;
-        var repos = Repos.Items;
+        var repos = AllRepos;
         if (_repoId is not null && repos.All(r => r.Id != _repoId)) { _repoId = null; ClearSelection(); }
 
         // The repository list is only rebuilt when the set of repositories changed.
@@ -422,6 +461,17 @@ public sealed class RepositoriesPage : UserControl, IPage
         if (gen != _generation) return;
 
         var shown = _repoId is null ? repos.ToList() : repos.Where(r => r.Id == _repoId).ToList();
+        // Whether any repository on show is in the middle of a merge is worth knowing on every tab.
+        var states = await Task.WhenAll(shown.Select(Repos.MergeStateAsync));
+        if (gen != _generation) return;
+        _mergeStates = shown.Zip(states).ToDictionary(x => x.First.Id, x => x.Second);
+        var conflicts = states.Sum(s => s.Conflicts.Count);
+        var merging = states.Count(s => s.InProgress);
+        _tabs[0].Content = conflicts > 0 ? $"Changes  ⚠ {conflicts}" : merging > 0 ? "Changes  ✓" : "Changes";
+        if (conflicts > 0 || merging > 0) _tabs[0].Foreground = Ui.Tk(conflicts > 0 ? "errorHi" : "ok"); else _tabs[0].ClearValue(Button.ForegroundProperty);
+        if (conflicts > 0 || merging > 0)
+            ToolTip.SetTip(_tabs[0], conflicts > 0 ? $"{conflicts} file{(conflicts == 1 ? " has" : "s have")} conflicts to resolve" : "A merge has every conflict resolved and is waiting to be finished");
+        else ToolTip.SetTip(_tabs[0], null);
         var rows = new List<ListBoxItem>();
         if (_view is not null) BuildCommitView(rows);
         else switch (_tab)
@@ -437,7 +487,7 @@ public sealed class RepositoriesPage : UserControl, IPage
 
         // Keep showing what was selected if it still exists; otherwise pick the first entry. The row is marked
         // before it goes into the list: selecting an item that was only just added does not highlight it.
-        var selected = rows.FirstOrDefault(r => r.IsSelected) ?? (_file is null ? rows.FirstOrDefault(r => r.Tag is ChangeRef or CommitRef or CommitFileRef or BranchRef or PrRef) : null);
+        var selected = rows.FirstOrDefault(r => r.IsSelected) ?? (_file is null ? rows.FirstOrDefault(r => r.Tag is ChangeRef or CommitRef or CommitFileRef or BranchRef or PrRef) ?? rows.FirstOrDefault(r => r.Tag is MergeRef) : null);
         if (selected is not null) selected.IsSelected = true;
         _building = true;
         try
@@ -487,17 +537,142 @@ public sealed class RepositoriesPage : UserControl, IPage
     private async Task BuildChangesAsync(List<ListBoxItem> rows, List<RepoEntry> shown)
     {
         var statuses = await Task.WhenAll(shown.Select(Repos.StatusAsync));
+        var folded = State.Data.ChangesCollapsed.ToHashSet();
         foreach (var st in statuses)
         {
             var repo = shown.First(r => r.Id == st.Id);
             var branch = st.Error is not null ? "error" : (st.Branch ?? "?") + (st.Ahead > 0 ? $" ↑{st.Ahead}" : "") + (st.Behind > 0 ? $" ↓{st.Behind}" : "");
-            rows.Add(HeaderRow(repo, branch + (st.Error is null ? st.Changes.Count == 0 ? " · clean" : $" · {st.Changes.Count} changed" : ""), st.Error, null));
-            var staged = st.Changes.Where(c => c.Staged).ToList();
-            var unstaged = st.Changes.Where(c => c.Unstaged || c.Untracked).ToList();
+            var merge = _mergeStates.GetValueOrDefault(st.Id, MergeState.None);
+            var conflicted = st.Changes.Where(c => c.Description == "conflict").ToList();
+            // The badge stays on the header when the repository is folded away, so a merge cannot hide.
+            var badge = !merge.Active && conflicted.Count == 0 ? null
+                : conflicted.Count > 0 ? Ui.Chip($"⚠ {conflicted.Count} conflict{(conflicted.Count == 1 ? "" : "s")}", Ui.Tk("error"))
+                : Ui.Chip($"✓ {merge.Verb} ready", Ui.Tk("ok"));
+            rows.Add(HeaderRow(repo, branch + (st.Error is null ? st.Changes.Count == 0 ? " · clean" : $" · {st.Changes.Count} changed" : ""), st.Error, null, folded.Contains(st.Id), () => ToggleChanges(st.Id), "its changed files", badge));
+            if (folded.Contains(st.Id)) continue;
+            if (merge.InProgress) rows.Add(MergeRow(repo, merge, conflicted.Count));
+            if (conflicted.Count > 0) rows.Add(SubHeader($"Conflicts ({conflicted.Count})"));
+            foreach (var c in conflicted) rows.Add(ChangeRow(repo, c, false));
+            var staged = st.Changes.Where(c => c.Staged && c.Description != "conflict").ToList();
+            var unstaged = st.Changes.Where(c => (c.Unstaged || c.Untracked) && c.Description != "conflict").ToList();
             if (staged.Count > 0) rows.Add(SubHeader($"Staged ({staged.Count})"));
             foreach (var c in staged) rows.Add(ChangeRow(repo, c, true));
             if (unstaged.Count > 0) rows.Add(SubHeader($"Changes ({unstaged.Count})"));
             foreach (var c in unstaged) rows.Add(ChangeRow(repo, c, false));
+        }
+    }
+
+    /// <summary>The row that says a merge (or rebase, cherry-pick, revert) is under way, with what is left and how to finish.</summary>
+    private ListBoxItem MergeRow(RepoEntry repo, MergeState merge, int conflicts)
+    {
+        var done = conflicts == 0;
+        var name = char.ToUpperInvariant(merge.Verb[0]) + merge.Verb[1..];
+        var go = Ui.TextButton("Continue", () => _ = Ui.TryAsync(this, () => ContinueMergeAsync(repo), $"Could not continue the {merge.Verb}"), done ? $"Commit the result and finish the {merge.Verb}" : "Resolve the conflicts first");
+        go.IsEnabled = done;
+        if (done) go.Classes.Add("accent");
+        var abort = Ui.TextButton("Abort…", () => _ = Ui.TryAsync(this, () => AbortMergeAsync(repo), $"Could not abort the {merge.Verb}"), $"Give up the {merge.Verb} and put everything back the way it was");
+        go.Padding = abort.Padding = new Thickness(9, 3);
+        go.FontSize = abort.FontSize = 12;
+        var tone = done ? "ok" : "error";
+        var item = new ListBoxItem
+        {
+            Tag = new MergeRef(repo.Id), Padding = new Thickness(8, 3), IsSelected = _lastSelected is MergeRef m && m.RepoId == repo.Id,
+            Content = new Border
+            {
+                Background = new SolidColorBrush(Ui.Color(tone), 0.14), BorderBrush = Ui.Tk(tone), BorderThickness = new Thickness(3, 0, 0, 0), CornerRadius = Ui.R(4), Padding = new Thickness(9, 6),
+                Child = new DockPanel
+                {
+                    Children =
+                    {
+                        Ui.Row(4, go, abort).Dock(Dock.Right),
+                        Ui.Column(1,
+                            new TextBlock { Text = merge.Title, FontWeight = FontWeight.SemiBold, FontSize = 12.5, TextTrimming = TextTrimming.CharacterEllipsis },
+                            new TextBlock
+                            {
+                                Text = done ? $"✓ All conflicts resolved — continue to finish the {merge.Verb}" : $"⚠ {conflicts} file{(conflicts == 1 ? "" : "s")} with conflicts left to resolve",
+                                Foreground = Ui.Tk(done ? "ok" : "errorHi"), FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis,
+                            }),
+                    },
+                },
+            },
+        };
+        ToolTip.SetTip(item, $"{name} in progress in {repo.Name}. Click to see where it stands.");
+        return item;
+    }
+
+    // ---- merging ----
+
+    private IEnumerable<ListBoxItem> ConflictRows(string? repoId = null) =>
+        _list.Items.OfType<ListBoxItem>().Where(i => i.Tag is ChangeRef { Staged: false, Change.Description: "conflict" } c && (repoId is null || c.Change.RepoId == repoId));
+
+    /// <summary>Selects a conflicted file of a repository: the one after <paramref name="afterPath"/>, or the first.</summary>
+    private void SelectConflict(string repoId, string? afterPath)
+    {
+        var rows = ConflictRows(repoId).ToList();
+        if (rows.Count == 0) return;
+        var at = afterPath is null ? -1 : rows.FindIndex(r => ((ChangeRef)r.Tag!).Change.Path == afterPath);
+        _list.SelectedItem = rows[(at + 1) % rows.Count];
+        _list.ScrollIntoView(_list.SelectedItem);
+    }
+
+    /// <summary>The file arrows of the merge tool: the next or previous conflicted file on show, in any repository.</summary>
+    private void StepConflict(int step)
+    {
+        var rows = ConflictRows().ToList();
+        if (rows.Count == 0) return;
+        var at = rows.FindIndex(r => r.IsSelected);
+        _list.SelectedItem = rows[((at < 0 ? 0 : at + step) % rows.Count + rows.Count) % rows.Count];
+        _list.ScrollIntoView(_list.SelectedItem);
+    }
+
+    /// <summary>After a file was marked resolved: on to the repository's next conflict, or to its merge when none is left.</summary>
+    private void AfterResolved(RepoEntry repo, string path)
+    {
+        var rest = ConflictRows(repo.Id).Select(r => (ChangeRef)r.Tag!).ToList();
+        var at = rest.FindIndex(r => r.Change.Path == path);
+        var next = rest.Where(r => r.Change.Path != path).ToList() is { Count: > 0 } others ? others[Math.Clamp(at, 0, others.Count - 1)] : null;
+        if (next is not null) { _change = next; _lastSelected = next; }
+        else if (_mergeStates.GetValueOrDefault(repo.Id)?.InProgress == true) { _change = null; _lastSelected = new MergeRef(repo.Id); }
+        _ = RefreshAsync();
+    }
+
+    private async Task ContinueMergeAsync(RepoEntry repo)
+    {
+        var before = await Repos.MergeStateAsync(repo);
+        var after = await Repos.ContinueMergeAsync(repo);
+        _branchSignature = "";
+        if (after.Conflicts.Count > 0) Ui.Toast(this, "More conflicts", $"The {before.Verb} of {repo.Name} stopped at its next commit: {after.Conflicts.Count} file{(after.Conflicts.Count == 1 ? "" : "s")} to resolve.");
+        else if (after.InProgress) Ui.Toast(this, $"The {before.Verb} is not finished yet", repo.Name);
+        else Ui.Toast(this, $"{char.ToUpperInvariant(before.Verb[0])}{before.Verb[1..]} finished", repo.Name);
+        await RefreshAsync();
+    }
+
+    private async Task AbortMergeAsync(RepoEntry repo)
+    {
+        var state = await Repos.MergeStateAsync(repo);
+        if (!await Ui.ConfirmAsync(Ui.Owner(this), $"Abort the {state.Verb}", $"Give up the {state.Verb} in {repo.Name}? Every conflict you resolved in it is thrown away and the repository goes back to where it was before.", "Abort")) return;
+        await Repos.AbortMergeAsync(repo);
+        _branchSignature = "";
+        Ui.Toast(this, $"The {state.Verb} was aborted", repo.Name);
+        await RefreshAsync();
+    }
+
+    /// <summary>
+    /// Runs something that can stop for conflicts (a merge, a cherry-pick, a revert). When it does, that is not a
+    /// failure to report: the Changes tab opens on the first conflict instead.
+    /// </summary>
+    private async Task MergingAsync(RepoEntry repo, Func<Task> work)
+    {
+        try { await work(); }
+        catch (InvalidOperationException)
+        {
+            var state = await Repos.MergeStateAsync(repo);
+            if (state.Conflicts.Count == 0) throw;
+            Ui.Toast(this, "Conflicts to resolve", $"{state.Title} in {repo.Name}: {state.Conflicts.Count} file{(state.Conflicts.Count == 1 ? "" : "s")}.");
+            _tab = Tab.Changes; _view = null; _viewFile = null; _file = null; _change = null; _lastSelected = null;
+            State.Data.ChangesCollapsed.Remove(repo.Id);
+            await RefreshAsync();
+            SelectConflict(repo.Id, null);
         }
     }
 
@@ -514,7 +689,7 @@ public sealed class RepositoriesPage : UserControl, IPage
         var what = Describe(c, staged);
         var tip = what switch
         {
-            "untracked" => "New file that git is not tracking yet", "conflict" => "Merge conflict: resolve it, then stage the file",
+            "untracked" => "New file that git is not tracking yet", "conflict" => "Conflict: select it to resolve it in the merge tool",
             _ => char.ToUpperInvariant(what[0]) + what[1..] + (staged ? ", staged for the next commit" : ", not staged"),
         };
         var reference = new ChangeRef(c, staged);
@@ -526,9 +701,16 @@ public sealed class RepositoriesPage : UserControl, IPage
         };
         var full = Path.Combine(repo.Path, c.Path);
         var menu = new ContextMenu();
-        if (staged) menu.Items.Add(Ui.Item("Unstage", () => Repos.UnstageAsync(repo, c.Path)));
+        if (what == "conflict")
+        {
+            menu.Items.Add(Ui.Item("Accept Yours (whole file)", () => Repos.ResolveWithSideAsync(repo, c.Path, false)));
+            menu.Items.Add(Ui.Item("Accept Theirs (whole file)", () => Repos.ResolveWithSideAsync(repo, c.Path, true)));
+            menu.Items.Add(Ui.Item("Mark as Resolved (as the file is now)", () => Repos.StageAsync(repo, c.Path)));
+            menu.Items.Add(new Separator());
+        }
+        else if (staged) menu.Items.Add(Ui.Item("Unstage", () => Repos.UnstageAsync(repo, c.Path)));
         else menu.Items.Add(Ui.Item("Stage", () => Repos.StageAsync(repo, c.Path)));
-        if (!staged) menu.Items.Add(Ui.Item(c.Untracked ? "Delete File…" : "Discard Changes…", () => DiscardAsync(repo, c)));
+        if (!staged && what != "conflict") menu.Items.Add(Ui.Item(c.Untracked ? "Delete File…" : "Discard Changes…", () => DiscardAsync(repo, c)));
         menu.Items.Add(new Separator());
         menu.Items.Add(Ui.Item("Open in Editor", () => Ui.OpenInEditor(c.Path, repo.Path), what != "deleted" && !c.Path.EndsWith('/'), Icons.Pencil));
         menu.Items.Add(Ui.Item("Open in Default App", () => Shell.Open(full), File.Exists(full)));
@@ -545,6 +727,14 @@ public sealed class RepositoriesPage : UserControl, IPage
 
     /// <summary>How many commits a page of history holds: fewer per repository when every repository is shown.</summary>
     private int HistoryPage => _repoId is null ? 15 : Math.Max(1, App.Services.Config.Settings.Repositories.LogCount);
+
+    private void ToggleChanges(string repoId)
+    {
+        var folded = State.Data.ChangesCollapsed;
+        if (!folded.Remove(repoId)) folded.Add(repoId);
+        State.SaveSoon();
+        _ = RefreshAsync();
+    }
 
     private void ToggleHistory(string repoId)
     {
@@ -681,7 +871,7 @@ public sealed class RepositoriesPage : UserControl, IPage
                     menu.Items.Add(Ui.Item("New Branch from Here…", () => NewBranchAsync(repo, b.Name)));
                     menu.Items.Add(Ui.Item("Merge into Current Branch…", async () =>
                     {
-                        if (await Ui.ConfirmAsync(Ui.Owner(this), "Merge", $"Merge {b.Name} into the current branch of {repo.Name}?", "Merge")) await Repos.MergeAsync(repo, b.Name);
+                        if (await Ui.ConfirmAsync(Ui.Owner(this), "Merge", $"Merge {b.Name} into the current branch of {repo.Name}?", "Merge")) await MergingAsync(repo, () => Repos.MergeAsync(repo, b.Name));
                     }, !b.IsCurrent));
                     menu.Items.Add(new Separator());
                     menu.Items.Add(Ui.Item("Copy Name", () => { _ = App.Services.Host.SetClipboardAsync(b.Name); }));
@@ -765,7 +955,7 @@ public sealed class RepositoriesPage : UserControl, IPage
 
     private async Task CheckPullRequestsAsync()
     {
-        var repos = _repoId is null ? Repos.Items : Repos.Items.Where(r => r.Id == _repoId).ToList();
+        var repos = _repoId is null ? AllRepos : AllRepos.Where(r => r.Id == _repoId).ToList();
         var watches = repos.Select(r => Watches.FindRepoPullRequests(r.Path)).Where(w => w is not null).ToList();
         if (watches.Count == 0) { Ui.Toast(this, "Nothing to check", "Set up pull requests for a repository first."); return; }
         await Ui.TryAsync(this, () => Task.WhenAll(watches.Select(w => Watches.CheckAsync(w!))));
@@ -833,6 +1023,13 @@ public sealed class RepositoriesPage : UserControl, IPage
         menu.Items.Add(Ui.Item("Stage All", () => Repos.StageAllAsync(repo)));
         menu.Items.Add(Ui.Item("Unstage All", () => Repos.UnstageAllAsync(repo)));
         menu.Items.Add(Ui.Item("Commit…", () => CommitAsync(repo), icon: Icons.Check));
+        if (_mergeStates.GetValueOrDefault(repo.Id) is { InProgress: true } merge)
+        {
+            var name = char.ToUpperInvariant(merge.Verb[0]) + merge.Verb[1..];
+            menu.Items.Add(new Separator());
+            menu.Items.Add(Ui.Item($"Continue {name}", () => ContinueMergeAsync(repo), merge.Conflicts.Count == 0, Icons.Check));
+            menu.Items.Add(Ui.Item($"Abort {name}…", () => AbortMergeAsync(repo)));
+        }
         menu.Items.Add(new Separator());
         menu.Items.Add(Ui.Item("Show Only This Repository", () => SelectRepo(repo.Id), _repoId != repo.Id));
         menu.Items.Add(Ui.Item("Copy Path", () => { _ = App.Services.Host.SetClipboardAsync(repo.Path); }));
@@ -879,8 +1076,8 @@ public sealed class RepositoriesPage : UserControl, IPage
         }));
         menu.Items.Add(Ui.Item("Check Out This Commit…", () => Guarded("Check out", $"Check out {c.Hash} in {repo.Name}? You will be on a detached HEAD: switch to a branch afterwards to keep working.", "Check out", () => Repos.CheckoutCommitAsync(repo, c.Hash))));
         menu.Items.Add(new Separator());
-        menu.Items.Add(Ui.Item("Cherry-pick onto Current Branch…", () => Guarded("Cherry-pick", $"Apply the changes of {c.Hash} (\"{c.Subject}\") as a new commit on the current branch of {repo.Name}?", "Cherry-pick", () => Repos.CherryPickAsync(repo, c.Hash))));
-        menu.Items.Add(Ui.Item("Revert This Commit…", () => Guarded("Revert", $"Create a new commit in {repo.Name} that undoes {c.Hash} (\"{c.Subject}\")?", "Revert", () => Repos.RevertAsync(repo, c.Hash))));
+        menu.Items.Add(Ui.Item("Cherry-pick onto Current Branch…", () => Guarded("Cherry-pick", $"Apply the changes of {c.Hash} (\"{c.Subject}\") as a new commit on the current branch of {repo.Name}?", "Cherry-pick", () => MergingAsync(repo, () => Repos.CherryPickAsync(repo, c.Hash)))));
+        menu.Items.Add(Ui.Item("Revert This Commit…", () => Guarded("Revert", $"Create a new commit in {repo.Name} that undoes {c.Hash} (\"{c.Subject}\")?", "Revert", () => MergingAsync(repo, () => Repos.RevertAsync(repo, c.Hash)))));
         menu.Items.Add(reset);
         return menu;
     }
@@ -908,6 +1105,26 @@ public sealed class RepositoriesPage : UserControl, IPage
     {
         var gen = _generation;
         _doc = null; _docRepo = null; _openLink = null;
+        // A conflicted file, or a repository's merge row, is the merge tool's to show.
+        if (_tab == Tab.Changes && _view is null && _file is null)
+        {
+            if (_lastSelected is MergeRef mr && Repos.Find(mr.RepoId) is { } mergeRepo && _mergeStates.GetValueOrDefault(mr.RepoId) is { Active: true } summary)
+            {
+                _merge.ShowSummary(mergeRepo, summary, _repoId is null);
+                ShowMerge(true);
+                return;
+            }
+            if (_change is { Staged: false, Change.Description: "conflict" } conflict && Repos.Find(conflict.Change.RepoId) is { } conflictRepo)
+            {
+                var all = ConflictRows().ToList();
+                await _merge.ShowFileAsync(conflictRepo, conflict.Change, _mergeStates.GetValueOrDefault(conflictRepo.Id, MergeState.None), _repoId is null);
+                if (gen != _generation) return;
+                _merge.SetFilePosition(all.FindIndex(r => r.Tag is ChangeRef x && x.Change.RepoId == conflict.Change.RepoId && x.Change.Path == conflict.Change.Path), all.Count);
+                ShowMerge(true);
+                return;
+            }
+        }
+        ShowMerge(false);
         List<Row> rows;
         var text = "";
         if (_view is { } view)
@@ -990,6 +1207,24 @@ public sealed class RepositoriesPage : UserControl, IPage
         _diff.ItemsSource = rows;
         ResetChangeNav(rows);
         if (_file is { Line: > 0 } target && rows.Count >= target.Line) Dispatcher.UIThread.Post(() => { _diff.SelectedIndex = target.Line - 1; _diff.ScrollIntoView(target.Line - 1); }, DispatcherPriority.Background);
+    }
+
+    private void ShowMerge(bool on)
+    {
+        if (!on) _merge.Collapse();
+        _merge.IsVisible = on;
+        _right.IsVisible = !on;
+        SizeList();
+    }
+
+    /// <summary>The list of files gives up room to the merge tool's three panes, and all of it when the tool asks.</summary>
+    private void SizeList()
+    {
+        var hidden = _merge.IsVisible && _merge.Expanded;
+        _leftPane.IsVisible = !hidden;
+        _main.ColumnDefinitions[0].Width = new GridLength(hidden ? 0 : _merge.IsVisible ? 430 : 500);
+        // In the narrower list the Commit button keeps its icon and tooltip only.
+        if (_commitButton.Content is StackPanel { Children: [_, TextBlock label] }) label.IsVisible = !_merge.IsVisible;
     }
 
     /// <summary>
@@ -1232,14 +1467,31 @@ public sealed class RepositoriesPage : UserControl, IPage
     private async Task CommitAsync(RepoEntry? repo)
     {
         if (repo is null) { Ui.Toast(this, "Choose a repository first", "Select one in the list, or right-click its name."); return; }
+        await CommitDialogAsync(this, repo);
+    }
+
+    /// <summary>
+    /// The commit dialog, shared by this page and the wiki. With <paramref name="everything"/> every change is
+    /// committed, staged or not (they are staged when the dialog is confirmed); otherwise only what is staged.
+    /// Returns true when a commit was made.
+    /// </summary>
+    public static async Task<bool> CommitDialogAsync(Control from, RepoEntry repo, bool everything = false)
+    {
         var status = await Repos.StatusAsync(repo);
-        var staged = status.Changes.Count(c => c.Staged);
-        if (staged == 0) { Ui.Toast(this, "Nothing is staged", $"Stage files, hunks or lines in {repo.Name} first."); return; }
+        var files = everything ? status.Changes.Select(c => c.Path).Distinct().ToList() : status.Changes.Where(c => c.Staged).Select(c => c.Path).Distinct().ToList();
+        if (files.Count == 0)
+        {
+            if (everything) Ui.Toast(from, "Nothing to commit", $"{repo.Name} has no changes since the last commit.");
+            else Ui.Toast(from, "Nothing is staged", $"Stage files, hunks or lines in {repo.Name} first.");
+            return false;
+        }
         var message = new TextBox { AcceptsReturn = true, MinHeight = 90, TextWrapping = TextWrapping.Wrap, PlaceholderText = "What changed, and why" };
-        await Ui.FormAsync(Ui.Owner(this), $"Commit to {repo.Name}", Ui.Column(10,
-            Ui.Text($"{staged} staged file{(staged == 1 ? "" : "s")} on {status.Branch ?? "?"}.", "dim", 12.5), Ui.Field("Message", message)), async () =>
+        var summary = $"{files.Count} {(everything ? "changed" : "staged")} file{(files.Count == 1 ? "" : "s")} on {status.Branch ?? "?"}.";
+        var list = Ui.Apply(Ui.Text(string.Join("\n", files.Take(12)) + (files.Count > 12 ? $"\n… and {files.Count - 12} more" : ""), "dim", 12), t => { t.FontFamily = Ui.Mono; t.TextWrapping = TextWrapping.NoWrap; t.TextTrimming = TextTrimming.CharacterEllipsis; });
+        return await Ui.FormAsync(Ui.Owner(from), $"Commit to {repo.Name}", Ui.Column(10, Ui.Text(summary, "dim", 12.5), list, Ui.Field("Message", message)), async () =>
         {
             if (string.IsNullOrWhiteSpace(message.Text)) return "Write a commit message.";
+            if (everything) await Repos.StageAllAsync(repo);
             await Repos.CommitAsync(repo, message.Text.Trim());
             return null;
         }, "Commit", 560);

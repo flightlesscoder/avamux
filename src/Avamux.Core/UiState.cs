@@ -19,6 +19,10 @@ public sealed class UiStateData
     public List<string> SearchExcluded { get; set; } = [];
     /// <summary>Repository ids whose commits are folded away in the History tab.</summary>
     public List<string> HistoryCollapsed { get; set; } = [];
+    /// <summary>Repositories folded away in the Changes tab of the Repositories page.</summary>
+    public List<string> ChangesCollapsed { get; set; } = [];
+    /// <summary>Whether the three panes of the merge tool scroll together.</summary>
+    public bool MergeSyncScroll { get; set; } = true;
     /// <summary>Most recently used last.</summary>
     public List<WikiPosition> WikiPositions { get; set; } = [];
 }

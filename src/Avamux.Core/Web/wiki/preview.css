@@ -8,7 +8,7 @@ a { color: var(--link); }
 code { background: var(--lineSoft); padding: .1em .35em; border-radius: 4px; font: 13px "JetBrainsMono Nerd Font Mono", "JetBrains Mono", ui-monospace, Menlo, monospace; }
 pre { background: var(--bgEditor); color: var(--textCode); padding: 12px 14px; border-radius: var(--radius); overflow: auto; position: relative; border: 1px solid var(--lineSoft); }
 pre code { background: none; padding: 0; }
-pre[data-lang]::after { content: attr(data-lang); position: absolute; top: 4px; right: 8px; font: 10.5px system-ui, sans-serif; color: var(--faint); text-transform: lowercase; }
+pre[data-lang]::after { content: attr(data-lang); position: absolute; top: 4px; right: 40px; font: 10.5px system-ui, sans-serif; color: var(--faint); text-transform: lowercase; }
 blockquote { margin: 0; padding: 0 1em; border-left: 3px solid var(--lineStrong); color: var(--textMute); }
 table { border-collapse: collapse; }
 th, td { border: 1px solid var(--scroll); padding: 5px 11px; }
@@ -73,3 +73,26 @@ pre.file .l::before { content: counter(ln); display: inline-block; width: 3.6em;
 #menu div { padding: 6px 12px; border-radius: 4px; cursor: default; white-space: nowrap; }
 #menu div:hover { background: var(--scroll); }
 #menu hr { margin: 4px 0; }
+
+/* Code blocks: copy button in the top-right corner, shown when the block is hovered or focused. */
+.codewrap { position: relative; margin: 1em 0; }
+.codewrap > pre { margin: 0; }
+.copycode { position: absolute; top: 5px; right: 6px; width: 26px; height: 26px; padding: 0; display: flex; align-items: center; justify-content: center;
+  background: var(--bgEditor); color: var(--dim); border: 1px solid var(--lineSoft); border-radius: calc(var(--radius) * .6); cursor: pointer; opacity: 0; transition: opacity .12s; }
+.codewrap:hover .copycode, .copycode:focus-visible, .copycode.done { opacity: 1; }
+.copycode:hover { color: var(--textStrong); border-color: var(--lineStrong); }
+.copycode.done { color: var(--ok); }
+
+/* Big files wait for a click. */
+.bigfile { border: 1px dashed var(--lineStrong); border-radius: var(--radius); padding: 22px; text-align: center; color: var(--textMute); }
+.bigfile p { margin: 0 0 12px; }
+.bigfile button { font: inherit; padding: 6px 16px; color: var(--textStrong); background: var(--panel); border: 1px solid var(--lineStrong); border-radius: calc(var(--radius) * .7); cursor: pointer; }
+.bigfile button:hover { border-color: var(--accent); }
+
+/* Tables made from csv files and zip listings. */
+.tablewrap { overflow: auto; max-height: calc(100vh - 110px); border: 1px solid var(--line); border-radius: var(--radius); }
+table.csv { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.csv th, table.csv td { padding: 4px 10px; border-bottom: 1px solid var(--lineSoft); text-align: left; white-space: nowrap; max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+table.csv thead th { position: sticky; top: 0; background: var(--panel); color: var(--textStrong); border-bottom: 1px solid var(--line); }
+table.csv .n { color: var(--ghost); text-align: right; width: 1%; user-select: none; -webkit-user-select: none; }
+table.csv .r { text-align: right; }
