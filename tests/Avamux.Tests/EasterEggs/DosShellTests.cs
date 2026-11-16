@@ -31,7 +31,8 @@ public class DosShellTests
         var dir = screen.Take();
         Assert.Contains("STARFLD  EXE", dir);
         Assert.Contains("CATFISH  BAS", dir);
-        Assert.Contains("15 file(s)", dir);
+        Assert.Contains("16 file(s)", dir);
+        Assert.Contains("AVATREK  BAS", dir);
         Assert.All(shell.Files, f => Assert.True(f.Name.Length <= 8 && f.Ext.Length <= 3, f.Full));
 
         shell.Enter("DIR/W *.EXE");
@@ -92,6 +93,26 @@ public class DosShellTests
         Assert.Contains("You scored 100 out of 100", text);
         Assert.False(shell.InGame);
         Assert.Equal("A:\\>", shell.Prompt);
+    }
+
+    [Fact]
+    public void Avatrek_runs_in_qbasic()
+    {
+        var screen = new Screen();
+        var shell = new DosShell(screen, (_, _) => null, () => { });
+        shell.Enter("avatrek");
+        Assert.Contains("QBASIC /RUN AVATREK.BAS", screen.Take());
+        shell.Enter("qbasic /run startrek.bas");
+        Assert.Contains("Try AVATREK.BAS", screen.Take());
+        shell.Enter("qbasic /run avatrek");
+        Assert.True(shell.InGame);
+        Assert.Contains("A V A T R E K", screen.Take());
+        shell.Enter("");
+        Assert.Equal("Command? ", shell.Prompt);
+        Assert.Contains("Stardate", screen.Take());
+        shell.Enter("quit");
+        Assert.False(shell.InGame);
+        Assert.Contains("at the end of your mission", screen.Take());
     }
 
     [Fact]

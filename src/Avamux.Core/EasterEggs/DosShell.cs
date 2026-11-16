@@ -60,6 +60,7 @@ public sealed class DosShell
             new("SOL", "EXE", 180688, D(2, 14, 8, 5), Program: true),
             new("QBASIC", "EXE", 194309, new(1994, 5, 31, 6, 22, 0), Program: true),
             new("CATFISH", "BAS", 29434, D(8, 1, 19, 40), "10 REM Cats throw fish across the city. Run it: QBASIC /RUN CATFISH.BAS"),
+            new("AVATREK", "BAS", 41216, D(8, 10, 2, 47), "10 REM Brave cats go where no cat has gone before.\n20 REM Run it: QBASIC /RUN AVATREK.BAS\n30 REM (No dogs were harmed. Several were barked at.)"),
             new("SHMUP", "EXE", 131072, D(8, 12, 1, 23), Program: true),
             new("AOL", "EXE", 311296, D(8, 14, 20, 15), Program: true),
         ];
@@ -207,10 +208,16 @@ public sealed class DosShell
         if (upper is "QBASIC" or "QBASIC.EXE")
         {
             var file = args.FirstOrDefault(a => !a.StartsWith('/'))?.ToUpperInvariant();
-            if (file is null) { _con.Write("QBASIC needs a program. Try: QBASIC /RUN CATFISH.BAS\n"); return; }
+            if (file is null) { _con.Write("QBASIC needs a program. Try: QBASIC /RUN CATFISH.BAS or QBASIC /RUN AVATREK.BAS\n"); return; }
+            if (file.StartsWith("A:\\", StringComparison.Ordinal)) file = file[3..];
             if (!file.EndsWith(".BAS", StringComparison.Ordinal)) file += ".BAS";
-            if (file != "CATFISH.BAS") { _con.Write(file.StartsWith("GORILLA", StringComparison.Ordinal) ? "File not found\nThe gorillas retired. Try CATFISH.BAS.\n" : "File not found\n"); return; }
-            Launch("CATFISH", args);
+            if (file is not ("CATFISH.BAS" or "AVATREK.BAS"))
+            {
+                _con.Write(file.StartsWith("GORILLA", StringComparison.Ordinal) ? "File not found\nThe gorillas retired. Try CATFISH.BAS.\n"
+                    : file.Contains("TREK", StringComparison.Ordinal) ? "File not found\nThe cats renamed it. Try AVATREK.BAS.\n" : "File not found\n");
+                return;
+            }
+            Launch(file[..^4], args);
             return;
         }
 
@@ -221,7 +228,7 @@ public sealed class DosShell
         if (name is "AVAMUX" or "ONLINE") name = "AOL";
         var hit = _files.FirstOrDefault(f => f.Name == name && (ext.Length == 0 ? f.Ext is "EXE" or "COM" or "BAT" or "BAS" : f.Ext == ext));
         if (hit is null) { _con.Write("Bad command or file name\n"); return; }
-        if (hit.Ext == "BAS") { _con.Write("Bad command or file name\n(.BAS files run in QBASIC: QBASIC /RUN CATFISH.BAS)\n"); return; }
+        if (hit.Ext == "BAS") { _con.Write("Bad command or file name\n(.BAS files run in QBASIC: QBASIC /RUN " + hit.Full + ")\n"); return; }
         if (hit.Name == "COMMAND") { _con.Write("\nAVA-DOS Version 6.26\n             (C)Copyright avamux 1981-1996.\n"); return; }
         if (hit.Name == "AUTOEXEC") { _promptSpec = "$p$g"; return; }
         if (hit.Ext is "TXT" or "SYS") { _con.Write("Bad command or file name\n"); return; }
@@ -233,6 +240,12 @@ public sealed class DosShell
         if (program == "AVAZORK")
         {
             _game = new AvaZork(_con);
+            _game.Start();
+            return;
+        }
+        if (program == "AVATREK")
+        {
+            _game = new AvaTrek(_con);
             _game.Start();
             return;
         }
@@ -364,6 +377,8 @@ public sealed class DosShell
                         HOTDOG /U puts your old colours back.
           SOL.EXE       The best part of a card game: winning.
           CATFISH.BAS   Cats throw fish across the city. QBASIC /RUN CATFISH.BAS
+          AVATREK.BAS   Brave cats go where no cat has gone before.
+                        QBASIC /RUN AVATREK.BAS
           SHMUP.EXE     NEBULA BLASTER '96. Blast everything.
           AOL.EXE       Avamux On-Line. Get on the information
                         superhighway! (Mouse required.)
@@ -375,7 +390,7 @@ public sealed class DosShell
         """;
 }
 
-/// <summary>A game played by typing lines at a prompt (AVAZORK).</summary>
+/// <summary>A game played by typing lines at a prompt (AVAZORK, AVATREK).</summary>
 public interface ITextGame
 {
     string Prompt { get; }
