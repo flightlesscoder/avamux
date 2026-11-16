@@ -7,7 +7,7 @@ namespace Avamux.Core.Commands;
 
 public sealed partial class CommandRegistry
 {
-    public static readonly string[] Pages = ["terminals", "search", "settings", "watching", "events", "dashboard", "logs", "wiki", "repositories", "interactive", "caffeine", "system", "chat", "workloads"];
+    public static readonly string[] Pages = ["terminals", "search", "settings", "watching", "events", "dashboard", "logs", "wiki", "repositories", "activity", "interactive", "caffeine", "system", "chat", "workloads"];
 
     private static object DiskJson(SystemInfo.DiskScan d) => new
     {

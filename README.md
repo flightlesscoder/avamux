@@ -30,6 +30,7 @@ Linux needs WebKitGTK 4.1 (`libwebkit2gtk-4.1`). macOS uses the system WKWebView
 | Logs | App logs, crash reports, history of ended terminals, script output; retention by size (200 MB), age and count. |
 | Wiki | Markdown editor (coloured to match the theme, with undo/redo) and live preview with folders, links (`[[Page]]`), front matter, syntax-highlighted code blocks (with a copy button) and pictures. Edits are saved automatically after `wiki.autoSaveSeconds` without a change (`wiki.autoSave`). Paste a picture or drop any file onto a page: it is saved next to the page and linked. Click a picture to zoom and pan; right-click it for Show in Folder, Copy and Copy Path. Also previews images, PDFs, audio, video, text files, CSV/TSV (as tables) and zip archives (as a listing), and opens anything else in its default app. Pictures, PDFs and recordings over `wiki.clickToPreviewMegabytes` (20) wait behind a "Load preview" button, and audio and video never start loading until played. Back and Forward buttons (also Alt+Left/Right and the mouse's side buttons) walk through the last 50 pages and files viewed. Entries can be opened in their own window. The last scroll position of recent files is remembered (`ui-state.json` in the data folder). The **Git** button keeps the wiki's history: commit, branches, history, and earlier versions of a page. See [The wiki in git](#the-wiki-in-git). |
 | Repos | Changes, history, branches and pull requests for one configured git repository or all of them. Stage or unstage files, hunks (right-click the coloured strip) or single lines (right-click a line number); diff or whole-file view; switch branches; inspect a commit file by file; cherry-pick, revert, reset, tag. Resolve merge conflicts in a three-way merge tool (see below). |
+| Git Activity | Where the work is going across hundreds of repositories: whole GitHub organisations, Azure DevOps organisations or projects, folders of clones, single URLs. Heatmaps you can pivot by anything (repositories, contributors, branches, languages, file types, frameworks, AI tools and models, days, weeks, weekdays, hours), leaderboards with trends, working rhythm, AI use, frameworks and languages, and the commits themselves. See [Git Activity](#git-activity). |
 | C# Interactive | A C# prompt that runs inside the running avamux, next to a screen of live controls built from XAML and from the C# you type. See [C# Interactive](#c-interactive). |
 | Caffeine | Keeps the computer awake until you turn it off, for a while (15 minutes to 8 hours, a length such as `1h30m`, or until a clock time), or while terminals are busy. See [Caffeine](#caffeine). |
 | AI Chat, Workloads | Placeholders, shown when switched on under Settings → AI Workloads. |
@@ -163,6 +164,50 @@ Unsaved edits are saved before git looks, and when git changes files (a branch s
 tree, the editor and the preview follow. From the command line the wiki is the repository called `wiki`:
 `avamux repo status wiki`, `avamux repo log wiki`, `avamux repo switch wiki drafts --create`,
 `avamux repo commit wiki "Notes from today"`, and `avamux repo select wiki` opens its window.
+
+## Git Activity
+
+Git Activity reads every repository of the sources set under **Git Activity Settings** (kept in `git-activity.json` in
+the data folder, apart from the other settings; **Edit File** opens it) and shows, for any range of days (the last two
+months to begin with):
+
+- **Heatmap**: rows by one thing and columns by another: repositories × days, contributors × repositories, frameworks
+  × weeks, weekday × hour, and so on. Click a row or a cell to look at just that; right-click a row for more.
+- **Leaderboards**: top contributors, repositories, branches (mainline ones marked), languages, frameworks and file
+  types, each with its weekly line, whether it is picking up or slowing down, and how much of it had AI help.
+- **Rhythm**: when the work is done (in each author's own time zone), per person, and week-by-week momentum per repository.
+- **AI**: AI help week by week, by tool (Claude Code, GitHub Copilot, Cursor, Codex, Aider, Devin, Gemini, Amazon Q…),
+  by model, and who uses it. AI is recognised from `Co-authored-by` trailers, "Generated with" lines and agent
+  accounts, and the commit is credited to the person, not the tool: a commit authored by the Copilot agent counts
+  for the human it worked with. Extra rules go in `aiRules`.
+- **Frameworks & Languages**: over 500 file extensions and names (C#, VB.NET, F#, Razor, XAML, MSBuild, web, data, SQL, scripts,
+  infrastructure…) and over 150 frameworks (Next.js, React, React Native, Angular, Vue, ASP.NET Core, Blazor,
+  MediatR, EF Core, MAUI, WPF, Spring, Django, Terraform…), recognised from each project's manifests *as they were
+  when each commit was made*: a repository that moved from Angular to React shows Angular for the work before the
+  move and React after it, including moves that arrive through a merge. A file counts toward the frameworks of the
+  projects it is in; test frameworks count only for test files.
+- **Commits**: the commits behind the figures. Double-click one, or right-click any repository, branch or commit, to
+  open it on the Repositories page (a repository that is not on this computer is cloned first) or in the browser.
+
+Filters: a range of days (presets such as Last 30 days, This quarter, Last year, All time; or any From and To,
+where an empty From is the beginning and an empty To is the present), contributors and repositories with a commit
+in the last N days of the range (to hide people who left and projects gone quiet; defaults under Settings), all /
+non-mainline / mainline branches (mainline names such as `main`, `develop`, `release/**`
+are a list in the settings), with or without AI, bots, merges, words, and which contributors count
+(**Contributors…**, or right-click one). Measure commits, lines changed, added or removed, files, or contributors.
+
+Sources: `github` (an organisation or user; token from `GITHUB_TOKEN` / `GH_TOKEN` or `gh auth login`),
+`azure-devops` (an organisation, or one project; `az login`, or a PAT in `AZURE_DEVOPS_EXT_PAT`), `local` (a folder
+of clones), `git` (clone URLs, using git's own credentials) and `repositories` (the Repositories page). Remote
+repositories are kept as shallow bare mirrors holding only what is read (`git-activity/mirrors`): the period, or from
+`readFrom` (a date, or `all` for the whole history). Choosing an earlier start on the page reads further back by
+itself. Later reads only read the commits that are new since the last one. A repository whose
+branch tips have not moved is not fetched or read again, and one GitHub says was not pushed to in the period is not
+fetched at all. For very large organisations, `"detail": "files"` downloads names only (no line counts).
+
+CLI: `avamux activity sources|add|remove|repos|scan [--wait]|status|stop|summary|top <by>`, e.g.
+`avamux activity top contributor --no-mainline --ai with`, or
+`avamux activity top framework --from 2024-01-01 --to 2024-12-31 --repos-active 90`.
 
 ## C# Interactive
 
