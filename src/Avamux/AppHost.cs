@@ -22,6 +22,23 @@ public sealed class AppHost(MainWindow window, IClassicDesktopStyleApplicationLi
     public Task<string?> GetClipboardAsync() => Dispatcher.UIThread.InvokeAsync(async () =>
         window.Clipboard is { } c ? await c.TryGetTextAsync() : null);
 
+    public Task<string> ScreenshotAsync(string file, string? title) => Dispatcher.UIThread.InvokeAsync<string>(() =>
+    {
+        var target = title is null ? window : lifetime.Windows.FirstOrDefault(w => w.IsVisible && (w.Title ?? "").Contains(title, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ArgumentException($"No open window has '{title}' in its title.");
+        var scale = target.RenderScaling;
+        var size = new Avalonia.PixelSize((int)(target.Bounds.Width * scale), (int)(target.Bounds.Height * scale));
+        using var bitmap = new Avalonia.Media.Imaging.RenderTargetBitmap(size, new Avalonia.Vector(96 * scale, 96 * scale));
+        bitmap.Render(target);
+        bitmap.Save(file, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
+        return target.Title ?? "";
+    }).GetTask();
+
+    public void OpenDiskMap(string scanId) => Ui(() =>
+    {
+        if (App.Services.Disks.Find(scanId) is { } scan) Views.DiskMapWindow.Open(scan, start: false);
+    });
+
     public void Navigate(string page) => Ui(() => window.Navigate(page));
     public string CurrentPage => window.CurrentPage;
 

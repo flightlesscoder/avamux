@@ -7,6 +7,7 @@ using Avamux.Core.Logging;
 using Avamux.Core.Nav;
 using Avamux.Core.Repos;
 using Avamux.Core.Search;
+using Avamux.Core.SystemInfo;
 using Avamux.Core.Theming;
 using Avamux.Core.Terminal;
 using Avamux.Core.Watching;
@@ -40,6 +41,7 @@ public sealed class AppServices : IAsyncDisposable
         Repos = new RepoService(Paths, Config);
         Repos.AddBuiltIn(Wiki.Repo);
         Nav = new NavService(Paths);
+        Disks = new DiskScanService(Paths);
         Web = new WebServer(this);
         Dashboard = new DashboardService(this);
         Search = new SearchService(this);
@@ -78,6 +80,8 @@ public sealed class AppServices : IAsyncDisposable
     public WikiService Wiki { get; }
     public RepoService Repos { get; }
     public NavService Nav { get; }
+    /// <summary>Disk space scans (System → a volume's map), kept running and saved whatever the windows do.</summary>
+    public DiskScanService Disks { get; }
     public WebServer Web { get; }
     public DashboardService Dashboard { get; }
     public CommandRegistry Commands { get; }
@@ -110,6 +114,7 @@ public sealed class AppServices : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Ui.Save();
+        Disks.Dispose();
         Watches.Dispose();
         Events.Dispose();
         Caffeine.Dispose();

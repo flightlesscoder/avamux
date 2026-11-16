@@ -78,6 +78,10 @@ public static class Icons
     public static readonly StreamGeometry ArrowRight = StreamGeometry.Parse("M4,11V13H16L10.5,18.5L11.92,19.92L19.84,12L11.92,4.08L10.5,5.5L16,11H4Z");
     public static readonly StreamGeometry CodeBraces = StreamGeometry.Parse("M8,3A2,2 0 0,0 6,5V9A2,2 0 0,1 4,11H3V13H4A2,2 0 0,1 6,15V19A2,2 0 0,0 8,21H10V19H8V14A2,2 0 0,0 6,12A2,2 0 0,0 8,10V5H10V3M16,3A2,2 0 0,1 18,5V9A2,2 0 0,0 20,11H21V13H20A2,2 0 0,0 18,15V19A2,2 0 0,1 16,21H14V19H16V14A2,2 0 0,1 18,12A2,2 0 0,1 16,10V5H14V3H16Z");
     public static readonly StreamGeometry Stop = StreamGeometry.Parse("M18,18H6V6H18V18Z");
+    public static readonly StreamGeometry Chip = StreamGeometry.Parse("M6,4H18A2,2 0 0,1 20,6V18A2,2 0 0,1 18,20H6A2,2 0 0,1 4,18V6A2,2 0 0,1 6,4M8,8V16H16V8H8M1.5,8H4V10H1.5V8M1.5,14H4V16H1.5V14M20,8H22.5V10H20V8M20,14H22.5V16H20V14M8,1.5H10V4H8V1.5M14,1.5H16V4H14V1.5M8,20H10V22.5H8V20M14,20H16V22.5H14V20Z");
+    public static readonly StreamGeometry Harddisk = StreamGeometry.Parse("M6,2H18A2,2 0 0,1 20,4V20A2,2 0 0,1 18,22H6A2,2 0 0,1 4,20V4A2,2 0 0,1 6,2M12,4.5A5.5,5.5 0 0,0 6.5,10A5.5,5.5 0 0,0 12,15.5A5.5,5.5 0 0,0 17.5,10A5.5,5.5 0 0,0 12,4.5M12,8.5A1.5,1.5 0 0,1 13.5,10A1.5,1.5 0 0,1 12,11.5A1.5,1.5 0 0,1 10.5,10A1.5,1.5 0 0,1 12,8.5M7,17.5A1,1 0 0,0 6,18.5A1,1 0 0,0 7,19.5A1,1 0 0,0 8,18.5A1,1 0 0,0 7,17.5Z");
+    public static readonly StreamGeometry Pause = StreamGeometry.Parse("M14,19H18V5H14M6,19H10V5H6V19Z");
+    public static readonly StreamGeometry Treemap = StreamGeometry.Parse("M3,3H13V13H3V3M15,3H21V9H15V3M15,11H21V21H15V11M3,15H13V21H3V15Z");
     public static readonly StreamGeometry Coffee = StreamGeometry.Parse("M2,21H20V19H2M20,8H18V5H20M20,3H4V13A4,4 0 0,0 8,17H14A4,4 0 0,0 18,13V10H20A2,2 0 0,0 22,8V5C22,3.89 21.1,3 20,3Z");
 
     /// <summary>Every icon by name, in lower case with dashes: "source-branch", "chart-line".</summary>

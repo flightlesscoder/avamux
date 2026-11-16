@@ -7,7 +7,13 @@ namespace Avamux.Core.Commands;
 
 public sealed partial class CommandRegistry
 {
-    public static readonly string[] Pages = ["terminals", "search", "settings", "watching", "events", "dashboard", "logs", "wiki", "repositories", "interactive", "caffeine", "chat", "workloads"];
+    public static readonly string[] Pages = ["terminals", "search", "settings", "watching", "events", "dashboard", "logs", "wiki", "repositories", "interactive", "caffeine", "system", "chat", "workloads"];
+
+    private static object DiskJson(SystemInfo.DiskScan d) => new
+    {
+        id = d.Id, title = d.Title, roots = d.Roots, state = d.State.ToString().ToLowerInvariant(), bytes = d.Size, files = d.Files, folders = d.Folders,
+        fraction = d.Fraction, elapsedSeconds = (int)d.Elapsed.TotalSeconds, started = d.Started, finished = d.Finished, current = d.CurrentPath,
+    };
 
     private void AddSearchCommands(AppServices s)
     {
@@ -138,6 +144,44 @@ public sealed partial class CommandRegistry
             s.Host.BossScreen(a.Flag("off") ? false : a.Flag("on") ? true : null);
             return "ok";
         });
+        Add("system status", "CPU, memory, GPUs, network and the mounted volumes, best effort.", [], async _ =>
+        {
+            var monitor = new SystemInfo.SystemMonitor();
+            monitor.Sample();
+            await Task.Delay(500);
+            var snap = monitor.Sample();
+            return J(new { snapshot = snap, volumes = SystemInfo.Volumes.List() });
+        });
+        Add("disk scans", "The disk scans and how far each got.", [], _ => J(s.Disks.Scans.Select(DiskJson)));
+        Add("disk scan", "Map the space taken on a volume (give its mount point) or in a folder. Runs in the background.",
+            [P("target", "A mount point or folder.", true), F("open", "Show the map window."), F("again", "Start over even if it was scanned before.")], a =>
+        {
+            var target = Path.GetFullPath(a.Require("target"));
+            var volume = SystemInfo.Volumes.List().FirstOrDefault(v => v.MountPoints.Contains(target.Length > 1 ? target.TrimEnd('/') : target));
+            var scan = volume is not null ? s.Disks.ForVolume(volume) : Directory.Exists(target) ? s.Disks.ForFolder(target) : throw new ArgumentException($"No such folder: {target}");
+            if (a.Flag("again") || scan.State == SystemInfo.DiskScanState.New) scan.Start();
+            else if (scan.State == SystemInfo.DiskScanState.Stopped || scan.State == SystemInfo.DiskScanState.Paused) scan.Resume();
+            if (a.Flag("open")) s.Host.OpenDiskMap(scan.Id);
+            return J(DiskJson(scan));
+        });
+        foreach (var (verb, help) in new[] { ("pause", "Pause a running disk scan."), ("resume", "Carry on a paused or stopped disk scan (loading it if need be)."), ("stop", "Stop a disk scan, keeping what it found."), ("forget", "Delete a disk scan.") })
+            Add("disk " + verb, help, [P("id", "Scan id (from disk scans) or its title.", true)], a =>
+            {
+                var key = a.Require("id");
+                var scan = s.Disks.Find(key) ?? s.Disks.Scans.FirstOrDefault(d => d.Title.Equals(key, StringComparison.OrdinalIgnoreCase) || d.Roots.Contains(key))
+                    ?? throw new ArgumentException($"No disk scan '{key}'.");
+                switch (verb)
+                {
+                    case "pause": scan.Pause(); break;
+                    case "stop": scan.Stop(wait: true); break;
+                    case "forget": s.Disks.Delete(scan); break;
+                    default:
+                        s.Disks.EnsureLoaded(scan);
+                        scan.Resume();
+                        break;
+                }
+                return J(DiskJson(scan));
+            });
         Add("caffeine status", "Is the computer being kept awake, and why.", [], _ => CaffeineJson(s));
         Add("caffeine on", "Keep the computer awake: until turned off (default), for a while, until a time, or while terminals are busy.",
             [O("for", "How long: 30m, 1h30m, 2h …"), O("until", "Until a time: 17:30, tomorrow 09:00, +45m …"), F("terminals", "Only while a terminal is running something (and a few minutes after).")], a =>
@@ -155,6 +199,8 @@ public sealed partial class CommandRegistry
             return CaffeineJson(s);
         });
         Add("caffeine off", "Let the computer sleep as usual again.", [], _ => { s.Caffeine.Off(); return CaffeineJson(s); });
+        Add("app screenshot", "Save a picture of the main window (or another avamux window) as a PNG.", [P("file", "Where to save it.", true), O("window", "Part of the title of the window to take instead.")],
+            async a => J(new { file = Path.GetFullPath(a.Require("file")), window = await s.Host.ScreenshotAsync(Path.GetFullPath(a.Require("file")), a.Str("window")) }));
         Add("app activate", "Bring the avamux window to the front.", [], _ => { s.Host.Activate(); return "ok"; });
         Add("app quit", "Close avamux.", [], _ => { s.Host.Quit(); return "bye"; });
         Add("app paths", "Show where avamux keeps its data and configuration.", [], _ => new JsonObject
