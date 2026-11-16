@@ -3,6 +3,7 @@ using Avamux.Core.Commands;
 using Avamux.Core.Config;
 using Avamux.Core.Dashboard;
 using Avamux.Core.Events;
+using Avamux.Core.GitActivity;
 using Avamux.Core.Logging;
 using Avamux.Core.Nav;
 using Avamux.Core.Repos;
@@ -41,6 +42,8 @@ public sealed class AppServices : IAsyncDisposable
         Repos = new RepoService(Paths, Config);
         Repos.AddBuiltIn(Wiki.Repo);
         Nav = new NavService(Paths);
+        Activity = new GitActivityService(Paths);
+        ActivitySources.RepositoriesPage = () => Repos.Items.Select(r => (r.Name, r.Path));
         Disks = new DiskScanService(Paths);
         Web = new WebServer(this);
         Dashboard = new DashboardService(this);
@@ -80,6 +83,8 @@ public sealed class AppServices : IAsyncDisposable
     public WikiService Wiki { get; }
     public RepoService Repos { get; }
     public NavService Nav { get; }
+    /// <summary>Git Activity: commits across whole organisations, read in the background.</summary>
+    public GitActivityService Activity { get; }
     /// <summary>Disk space scans (System → a volume's map), kept running and saved whatever the windows do.</summary>
     public DiskScanService Disks { get; }
     public WebServer Web { get; }
@@ -104,6 +109,7 @@ public sealed class AppServices : IAsyncDisposable
     {
         await Web.StartAsync();
         Config.Watch();
+        Activity.Watch();
         ThemeFiles.Watch();
         Caffeine.Start();
         Logs.Start();
@@ -115,6 +121,7 @@ public sealed class AppServices : IAsyncDisposable
     {
         Ui.Save();
         Disks.Dispose();
+        Activity.Dispose();
         Watches.Dispose();
         Events.Dispose();
         Caffeine.Dispose();

@@ -305,8 +305,19 @@ public sealed class RepositoriesPage : UserControl, IPage
         _repoId = repo.Id;
         ClearSelection();
         if (what?.StartsWith("commit:", StringComparison.Ordinal) == true) { _tab = Tab.History; _ = ViewCommitAsync(repo, what[7..]); return; }
+        if (what?.StartsWith("branch:", StringComparison.Ordinal) == true) { _tab = Tab.Branches; _ = RevealBranchAsync(repo, what[7..]); return; }
         if (what?.StartsWith("file:", StringComparison.Ordinal) == true) { _tab = Tab.Changes; _file = (repo.Id, what[5..], line); }
         _ = RefreshAsync();
+    }
+
+    /// <summary>Shows a branch on the Branches tab: the local one of that name, else a remote one ("origin/name").</summary>
+    private async Task RevealBranchAsync(RepoEntry repo, string name)
+    {
+        var branches = await Repos.BranchesAsync(repo);
+        var b = branches.FirstOrDefault(x => !x.IsRemote && x.Name == name) ?? branches.FirstOrDefault(x => x.IsRemote && x.Name.EndsWith("/" + name, StringComparison.Ordinal));
+        if (b is null) Ui.Toast(this, "Branch not found", $"{repo.Name} has no branch {name}. It may have been deleted, or need a fetch.");
+        else { _branch = new BranchRef(repo.Id, b); _lastSelected = _branch; }
+        await RefreshAsync();
     }
 
     private void ClearSelection()
