@@ -23,6 +23,10 @@ public interface IAppHost
     void OpenThemeEditor(string? theme);
     /// <summary>Shows (true), hides (false) or toggles (null) the boss screen.</summary>
     void BossScreen(bool? show);
+    /// <summary>Renders a window (the main one, or the first whose title contains <paramref name="title"/>) to a PNG file; returns its title.</summary>
+    Task<string> ScreenshotAsync(string file, string? title);
+    /// <summary>Opens the map window of a disk scan.</summary>
+    void OpenDiskMap(string scanId);
 }
 
 public class NullAppHost : IAppHost
@@ -44,6 +48,8 @@ public class NullAppHost : IAppHost
     public virtual void Search(string query) { }
     public virtual void OpenThemeEditor(string? theme) { }
     public virtual void BossScreen(bool? show) { }
+    public virtual void OpenDiskMap(string scanId) { }
+    public virtual Task<string> ScreenshotAsync(string file, string? title) => throw new NotSupportedException("There is no window to take a picture of.");
 }
 
 public static class Shell

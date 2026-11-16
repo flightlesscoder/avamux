@@ -28,6 +28,7 @@ public sealed class MainWindow : AppWindow
         new("repositories", "Repos", "Repositories", Icons.SourceBranch),
         new("interactive", "C# Interactive", "C# Interactive: run C# inside the running avamux", Icons.CodeBraces),
         new("caffeine", "Caffeine", "Caffeine: keep the computer awake", Icons.Coffee),
+        new("system", "System", "System: CPU, memory, GPU, and what takes the space on each disk", Icons.Chip),
         new("chat", "AI Chat", "AI Chat", Icons.Forum),
         new("workloads", "Workloads", "Workloads: providers, work queues and models", Icons.Server),
     ];
@@ -297,6 +298,7 @@ public sealed class MainWindow : AppWindow
             "repositories" => new RepositoriesPage(),
             "interactive" => new Avamux.Scripting.InteractivePage(),
             "caffeine" => new CaffeinePage(),
+            "system" => new SystemPage(),
             "chat" => new ChatPage(),
             "workloads" => new WorkloadsPage(),
             _ => new TextBlock { Text = key },
