@@ -350,6 +350,8 @@ public sealed class ActivityEngine
 
         var columns = Ordered(colDim, colTallies, f, measure, int.MaxValue, out _);
         var rowKeys = Ordered(rowDim, rowTallies, f, measure, maxRows, out var hidden);
+        // Time rows include steps nothing happened in (a quiet Tuesday): they still get a (zero) total.
+        foreach (var r in rowKeys) if (!rowTallies.ContainsKey(r)) rowTallies[r] = new Tally { People = new(StringComparer.OrdinalIgnoreCase) };
         var values = new double[rowKeys.Count, columns.Count];
         double max = 0;
         var colIndex = columns.Select((c, i) => (c, i)).ToDictionary(x => x.c, x => x.i, StringComparer.Ordinal);

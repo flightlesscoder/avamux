@@ -101,7 +101,7 @@ public sealed class HeatmapControl : Control
             ctx.DrawText(Text(label, 10.5, dim, Math.Max(_cell * every, 40)), new Point(LabelWidth + c * _cell, Header - 18));
         }
         ctx.DrawText(Text(ActivityEngine.Label(_m.Measure), 10.5, dim, TotalsWidth - 8), new Point(LabelWidth + cols * _cell + 8, Header - 18));
-        var rowMax = _m.Rows.Count == 0 ? 0 : _m.Rows.Max(r => _m.RowTallies[r].Value(_m.Measure));
+        var rowMax = _m.Rows.Count == 0 ? 0 : _m.Rows.Max(r => Total(r));
         var bar = Ui.Tk("accent");
         for (var r = 0; r < _m.Rows.Count; r++)
         {
@@ -121,13 +121,15 @@ public sealed class HeatmapControl : Control
                     ctx.DrawText(label, new Point(rect.X + (rect.Width - label.Width) / 2, y + 4));
                 }
             }
-            var total = _m.RowTallies[_m.Rows[r]].Value(_m.Measure);
+            var total = Total(_m.Rows[r]);
             var x = LabelWidth + cols * _cell + 8;
             var w = rowMax > 0 ? (TotalsWidth - 50) * total / rowMax : 0;
             ctx.FillRectangle(bar, new Rect(x, y + 6, Math.Max(1, w), RowHeight - 12));
             ctx.DrawText(Text(Heat.Number(total), 10.5, dim, 48), new Point(x + w + 4, y + 3));
         }
     }
+
+    private double Total(string row) => _m!.RowTallies.TryGetValue(row, out var t) ? t.Value(_m.Measure) : 0;
 
     private static string ShortColumn(ActivityDimension d, string key) => d switch
     {
@@ -155,7 +157,7 @@ public sealed class HeatmapControl : Control
         InvalidateVisual();
         if (_m is null || hit.Row < 0) { Hovered?.Invoke(""); return; }
         var row = _display(_m.RowDimension, _m.Rows[hit.Row]);
-        var tally = _m.RowTallies[_m.Rows[hit.Row]];
+        var tally = _m.RowTallies.GetValueOrDefault(_m.Rows[hit.Row]) ?? new Tally();
         if (hit.Col >= 0)
         {
             var v = _m.Values[hit.Row, hit.Col];
