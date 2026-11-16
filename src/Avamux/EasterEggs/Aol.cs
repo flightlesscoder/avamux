@@ -806,6 +806,7 @@ public sealed class Aol : DosProgram
     private static readonly (string File, string What, int Bytes)[] Downloads =
     [
         ("NEBULA.ZIP", "Nebula Blaster '96 (shareware)", 1_204_733), ("CATFISH.ZIP", "Cats throw fish. Educational!", 29_434),
+        ("AVATREK.ZIP", "Cats in space. Boldly.", 41_216),
         ("TOASTERS.ZIP", "Flying toaster screen saver", 388_117), ("BIGGAME.ZIP", "A very big game (8 disks)", 11_534_336),
     ];
 
