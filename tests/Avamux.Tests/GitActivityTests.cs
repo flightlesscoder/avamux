@@ -254,6 +254,26 @@ public class GitActivityTests : IDisposable
         Assert.Equal(["ancient"], engine.Filter(before).Select(r => r.Commit.Subject));
     }
 
+    [Fact]
+    public void Quiet_weekdays_and_hours_are_rows_with_zero_totals()
+    {
+        // One commit: six weekdays and 23 hours with nothing in them still have to be drawable rows.
+        var repo = new ActivityRepo { Key = "r", Name = "r" };
+        var commit = new ActivityCommit { Hash = "a", RepoKey = "r", PersonName = "Ana", PersonEmail = "a@x", AuthorName = "Ana", When = DateTimeOffset.Now.AddDays(-1), Branch = "main",
+            Parts = [new ActivityPart { Key = ".cs", Files = 1, Added = 3 }] };
+        var engine = new ActivityEngine([commit], new Dictionary<string, ActivityRepo> { ["r"] = repo }, Config());
+        var f = new ActivityFilter { From = DateTimeOffset.Now.AddDays(-30) };
+        var rows = engine.Filter(f);
+        var map = engine.Pivot(rows, ActivityDimension.Weekday, ActivityDimension.Hour, ActivityMeasure.Commits, f);
+        Assert.Equal(7, map.Rows.Count);
+        Assert.All(map.Rows, r => Assert.True(map.RowTallies.ContainsKey(r)));
+        Assert.Equal(1, map.Rows.Sum(r => map.RowTallies[r].Commits));
+        Assert.Equal(24, engine.Top(rows, ActivityDimension.Hour, ActivityMeasure.Commits, f, 30).Count);
+        var days = engine.Pivot(rows, ActivityDimension.Day, ActivityDimension.Repository, ActivityMeasure.Commits, f);
+        Assert.InRange(days.Rows.Count, 30, 32);
+        Assert.All(days.Rows, r => Assert.True(days.RowTallies.ContainsKey(r)));
+    }
+
     [Theory]
     [InlineData("Ana", "ana@x.com", "Fix\n\nCo-authored-by: Cursor Agent <cursoragent@cursor.com>", "Cursor", false)]
     [InlineData("Ana (aider)", "ana@x.com", "aider: fix the thing\n\nCo-authored-by: aider (anthropic/claude-sonnet-4) <noreply@aider.chat>", "Aider", false)]
