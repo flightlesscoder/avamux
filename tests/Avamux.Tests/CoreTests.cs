@@ -230,6 +230,32 @@ public class RecurrenceTests
     }
 
     [Fact]
+    public void Skipped_dates_leave_out_occurrences_but_still_count_toward_the_total()
+    {
+        var monday = new DateTime(2026, 12, 21, 10, 0, 0);
+        var e = Item(monday, RecurrenceFreq.Daily, r => r.Count = 4);
+        e.SkippedDates = [new DateOnly(2026, 12, 22)];
+        Assert.Equal([monday, monday.AddDays(2), monday.AddDays(3)], RecurrenceCalculator.All(e).Select(o => o.Start));
+        Assert.Equal(monday.AddDays(2), RecurrenceCalculator.Next(e, monday)!.Start);
+        Assert.Empty(RecurrenceCalculator.Between(e, monday.AddDays(1), monday.AddDays(1).AddHours(23)));
+        // The skipped occurrence is still found when asked for by date.
+        Assert.Equal(monday.AddDays(1), RecurrenceCalculator.OccurrenceOn(e, new DateOnly(2026, 12, 22))!.Start);
+        Assert.Null(RecurrenceCalculator.OccurrenceOn(e, new DateOnly(2026, 12, 26)));
+    }
+
+    [Fact]
+    public void Skipping_works_for_weekly_and_fast_forwarded_interval_repeats()
+    {
+        var weekly = Item(new DateTime(2026, 11, 5, 9, 0, 0), RecurrenceFreq.Weekly); // a Thursday
+        weekly.SkippedDates = [new DateOnly(2026, 11, 12)];
+        Assert.Equal(new DateTime(2026, 11, 19, 9, 0, 0), RecurrenceCalculator.Next(weekly, new DateTime(2026, 11, 6))!.Start);
+
+        var interval = Item(new DateTime(2020, 1, 1), RecurrenceFreq.Interval, r => r.IntervalMinutes = 15);
+        interval.SkippedDates = [new DateOnly(2026, 11, 11)];
+        Assert.Equal(new DateTime(2026, 11, 12, 0, 0, 0), RecurrenceCalculator.Next(interval, new DateTime(2026, 11, 11, 10, 7, 0))!.Start);
+    }
+
+    [Fact]
     public void Descriptions_read_naturally()
     {
         Assert.Equal("Weekly on Mon, Tue, Fri", RecurrenceCalculator.Describe(new Recurrence { Freq = RecurrenceFreq.Weekly, Days = [DayOfWeek.Friday, DayOfWeek.Monday, DayOfWeek.Tuesday] }));
@@ -287,6 +313,142 @@ public class EventServiceTests
         var loaded = Assert.Single(second.Items);
         Assert.Equal(RecurrenceFreq.Weekly, loaded.Recurrence.Freq);
         Assert.Equal([DayOfWeek.Monday], loaded.Recurrence.Days);
+    }
+}
+
+public class EventSkipTests
+{
+    private static readonly DateTime Monday = new(2026, 12, 21, 10, 0, 0);
+
+    private static EventItem Weekdays() => new()
+    {
+        Title = "Standup", Start = Monday, End = Monday.AddMinutes(15),
+        Recurrence = new Recurrence { Freq = RecurrenceFreq.Weekly, Days = [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday] },
+    };
+
+    [Fact]
+    public void A_skipped_occurrence_leaves_the_agenda_and_the_next_occurrence()
+    {
+        using var box = new Sandbox();
+        using var config = new ConfigService(box.Paths);
+        var now = Monday.AddHours(-1);
+        using var events = new EventService(box.Paths, config) { Now = () => now };
+        var e = events.Add(Weekdays());
+        events.Skip(e, [new DateOnly(2026, 12, 21), new DateOnly(2026, 12, 22)]);
+        Assert.Equal(new DateTime(2026, 12, 23, 10, 0, 0), events.NextOccurrence(e)!.Start);
+        Assert.Equal([new DateTime(2026, 12, 23, 10, 0, 0), new DateTime(2026, 12, 24, 10, 0, 0)], events.Agenda(Monday, Monday.AddDays(3).AddHours(12)).Select(x => x.Occurrence.Start));
+
+        events.Unskip(e, [new DateOnly(2026, 12, 21)]);
+        Assert.Equal(Monday, events.NextOccurrence(e)!.Start);
+        Assert.Equal([new DateOnly(2026, 12, 22)], e.SkippedDates);
+    }
+
+    [Fact]
+    public void Skipping_a_date_without_an_occurrence_or_on_a_one_off_event_is_an_error()
+    {
+        using var box = new Sandbox();
+        using var config = new ConfigService(box.Paths);
+        using var events = new EventService(box.Paths, config);
+        var e = events.Add(Weekdays());
+        var ex = Assert.Throws<ArgumentException>(() => events.Skip(e, [new DateOnly(2026, 12, 22), new DateOnly(2026, 12, 26)])); // a Saturday
+        Assert.Contains("2026-12-26", ex.Message);
+        Assert.Empty(e.SkippedDates); // nothing is applied when one date is wrong
+        Assert.Throws<ArgumentException>(() => events.Unskip(e, [new DateOnly(2026, 12, 22)]));
+        var once = events.Add(new EventItem { Title = "Once", Start = Monday });
+        Assert.Throws<InvalidOperationException>(() => events.Skip(once, [new DateOnly(2026, 12, 21)]));
+    }
+
+    [Fact]
+    public void Tick_does_not_fire_a_skipped_occurrence()
+    {
+        using var box = new Sandbox();
+        using var config = new ConfigService(box.Paths);
+        var now = Monday.AddMinutes(-1);
+        using var events = new EventService(box.Paths, config) { Now = () => now };
+        var fired = new List<string>();
+        events.Fired += (_, phase, o) => fired.Add($"{o.Start:MM-dd}:{phase}");
+        events.Tick();
+        var e = events.Add(Weekdays());
+        events.Skip(e, [new DateOnly(2026, 12, 21)]);
+        now = Monday.AddSeconds(30); events.Tick(); // the skipped Monday start passes
+        now = Monday.AddMinutes(15).AddSeconds(30); events.Tick(); // and its end
+        Assert.Empty(fired);
+        now = Monday.AddDays(1).AddMinutes(-1); events.Tick();
+        now = Monday.AddDays(1).AddSeconds(30); events.Tick();
+        now = Monday.AddDays(1).AddMinutes(15).AddSeconds(30); events.Tick();
+        Assert.Equal(["12-22:start", "12-22:end"], fired);
+        Assert.False(e.Completed);
+    }
+
+    [Fact]
+    public void An_event_whose_remaining_occurrences_are_all_skipped_completes_and_comes_back_when_unskipped()
+    {
+        using var box = new Sandbox();
+        using var config = new ConfigService(box.Paths);
+        var now = Monday.AddHours(-1);
+        using var events = new EventService(box.Paths, config) { Now = () => now };
+        var fired = new List<string>();
+        events.Fired += (_, phase, _) => fired.Add(phase);
+        events.Tick();
+        var e = events.Add(new EventItem { Title = "Two days", Start = Monday, Recurrence = new Recurrence { Freq = RecurrenceFreq.Daily, Count = 2 } });
+        events.Skip(e, [new DateOnly(2026, 12, 21), new DateOnly(2026, 12, 22)]);
+        now = Monday.AddHours(1); events.Tick();
+        Assert.True(e.Completed);
+        Assert.Empty(fired);
+        Assert.Null(events.NextOccurrence(e));
+
+        e.Completed = true;
+        now = Monday.AddHours(-1);
+        events.Unskip(e, [new DateOnly(2026, 12, 22)]);
+        Assert.False(e.Completed);
+        Assert.Equal(Monday.AddDays(1), events.NextOccurrence(e)!.Start);
+    }
+
+    [Fact]
+    public void Skipped_dates_survive_a_restart_and_old_files_without_them_load()
+    {
+        using var box = new Sandbox();
+        using var config = new ConfigService(box.Paths);
+        using (var first = new EventService(box.Paths, config))
+        {
+            var e = first.Add(Weekdays());
+            first.Skip(e, [new DateOnly(2026, 12, 25)]);
+            first.Save();
+        }
+        using (var second = new EventService(box.Paths, config))
+            Assert.Equal([new DateOnly(2026, 12, 25)], Assert.Single(second.Items).SkippedDates);
+        var file = box.Paths.StateFile("events");
+        File.WriteAllText(file, File.ReadAllText(file).Replace("\"SkippedDates\"", "\"Other\"").Replace("\"skippedDates\"", "\"other\""));
+        using var old = new EventService(box.Paths, config);
+        Assert.Empty(Assert.Single(old.Items).SkippedDates);
+    }
+
+    [Fact]
+    public async Task Commands_skip_unskip_and_show_the_dates()
+    {
+        using var box = new Sandbox();
+        await using var app = new AppServices(box.Paths);
+        var registry = CommandRegistry.Build(null);
+        var add = CliParser.Parse(registry, ["event", "add", "Standup", "--start", "2026-12-21T10:00", "--repeat", "weekly", "--days", "weekdays"]);
+        Assert.True((await app.Commands.ExecuteAsync("event add", add.Args))["ok"]!.GetValue<bool>());
+
+        var skip = CliParser.Parse(registry, ["event", "skip", "Standup", "2026-12-25", "2026-12-28"]);
+        Assert.Null(skip.Error);
+        var r = await app.Commands.ExecuteAsync("event skip", skip.Args);
+        Assert.True(r["ok"]!.GetValue<bool>(), r.ToJsonString());
+        Assert.Equal(["2026-12-25", "2026-12-28"], r["result"]!["skipped"]!.AsArray().Select(n => n!.GetValue<string>()));
+
+        r = await app.Commands.ExecuteAsync("event skip", CliParser.Parse(registry, ["event", "skip", "Standup", "2026-12-26"]).Args); // a Saturday
+        Assert.False(r["ok"]!.GetValue<bool>());
+        Assert.Contains("no occurrence on 2026-12-26", r.ToJsonString());
+
+        r = await app.Commands.ExecuteAsync("event edit", CliParser.Parse(registry, ["event", "edit", "Standup", "--unskip", "2026-12-25", "--skip", "2026-12-29"]).Args);
+        Assert.True(r["ok"]!.GetValue<bool>(), r.ToJsonString());
+        Assert.Equal(["2026-12-28", "2026-12-29"], r["result"]!["skipped"]!.AsArray().Select(n => n!.GetValue<string>()));
+
+        r = await app.Commands.ExecuteAsync("event unskip", CliParser.Parse(registry, ["event", "unskip", "Standup", "2026-12-28,2026-12-29"]).Args);
+        Assert.Null(r["result"]!["skipped"]);
+        Assert.True(CliParser.Parse(registry, ["event", "skip", "--help"]).Help);
     }
 }
 
