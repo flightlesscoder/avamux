@@ -95,6 +95,32 @@ public sealed class EventService : IDisposable
         try { File.Delete(AttachmentPath(item, name)); } catch { }
     }
 
+    // ---- skipped occurrences ----
+
+    /// <summary>Skips the occurrences that start on these local dates. Throws if a date has none. Call Save afterwards.</summary>
+    public void Skip(EventItem item, IEnumerable<DateOnly> dates)
+    {
+        var days = dates.Distinct().ToList();
+        if (days.Count == 0) return;
+        if (item.Recurrence.Freq == RecurrenceFreq.None) throw new InvalidOperationException($"\"{item.Title}\" does not repeat, so there is no single occurrence to skip.");
+        foreach (var day in days)
+            if (RecurrenceCalculator.OccurrenceOn(item, day) is null) throw new ArgumentException($"\"{item.Title}\" has no occurrence on {day:yyyy-MM-dd}.");
+        foreach (var day in days)
+            if (!item.SkippedDates.Contains(day)) item.SkippedDates.Add(day);
+        item.SkippedDates.Sort();
+    }
+
+    /// <summary>Brings skipped occurrences back. Throws if a date is not skipped. Call Save afterwards.</summary>
+    public void Unskip(EventItem item, IEnumerable<DateOnly> dates)
+    {
+        var days = dates.Distinct().ToList();
+        foreach (var day in days)
+            if (!item.SkippedDates.Contains(day)) throw new ArgumentException($"{day:yyyy-MM-dd} is not skipped for \"{item.Title}\".");
+        item.SkippedDates.RemoveAll(days.Contains);
+        // An event that ran out of occurrences only because of skips is live again.
+        if (item.Completed && RecurrenceCalculator.Next(item, Now()) is not null) item.Completed = false;
+    }
+
     public void Save()
     {
         lock (_gate) JsonUtil.SaveFile(_paths.StateFile("events"), _state);

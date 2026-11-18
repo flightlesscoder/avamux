@@ -36,6 +36,8 @@ public sealed class EventItem
     public DateTime? End { get; set; }
     public bool AllDay { get; set; }
     public Recurrence Recurrence { get; set; } = new();
+    /// <summary>Local dates of repeating occurrences that are skipped (iCalendar EXDATE): an occurrence whose start falls on one of them does not happen.</summary>
+    public List<DateOnly> SkippedDates { get; set; } = [];
     /// <summary>Shell script run when an occurrence starts / a timer or task triggers.</summary>
     public string? OnStartScript { get; set; }
     /// <summary>Shell script run when an occurrence ends.</summary>
@@ -60,8 +62,24 @@ public static class RecurrenceCalculator
 {
     private const int MaxSteps = 200_000;
 
-    /// <summary>All occurrences in chronological order, lazily. Infinite for unbounded recurrences.</summary>
-    public static IEnumerable<Occurrence> All(EventItem e, DateTime? fastForwardTo = null)
+    /// <summary>All occurrences in chronological order, lazily. Infinite for unbounded recurrences. Skipped dates are left out
+    /// (they still count toward <see cref="Recurrence.Count"/>, as with iCalendar EXDATE).</summary>
+    public static IEnumerable<Occurrence> All(EventItem e, DateTime? fastForwardTo = null) =>
+        e.SkippedDates.Count == 0 ? Generate(e, fastForwardTo) : Generate(e, fastForwardTo).Where(o => !e.SkippedDates.Contains(DateOnly.FromDateTime(o.Start)));
+
+    /// <summary>The occurrence that starts on a local date, even if that date is skipped. Null when the event has none that day.</summary>
+    public static Occurrence? OccurrenceOn(EventItem e, DateOnly day)
+    {
+        var from = day.ToDateTime(TimeOnly.MinValue);
+        foreach (var o in Generate(e, from))
+        {
+            if (o.Start >= from.AddDays(1)) return null;
+            if (o.Start >= from) return o;
+        }
+        return null;
+    }
+
+    private static IEnumerable<Occurrence> Generate(EventItem e, DateTime? fastForwardTo)
     {
         var r = e.Recurrence;
         var duration = e.End is { } end && end > e.Start ? end - e.Start : (TimeSpan?)null;
