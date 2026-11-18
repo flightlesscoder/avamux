@@ -151,7 +151,12 @@ public sealed class EventsPage : UserControl, IPage
                     Background = ItemBrush(item), CornerRadius = Ui.R(3), Padding = new Thickness(4, 0), Opacity = item.Enabled && !item.Completed ? 0.95 : 0.4, Cursor = new Cursor(StandardCursorType.Hand),
                     Child = new TextBlock { Text = label, FontSize = 11, Foreground = ItemText(item), TextTrimming = TextTrimming.CharacterEllipsis },
                 };
-                ToolTip.SetTip(chip, item.Title + (string.IsNullOrWhiteSpace(item.Location) ? "" : "\n" + item.Location) + "\nDouble-click to edit");
+                ToolTip.SetTip(chip, item.Title + (string.IsNullOrWhiteSpace(item.Location) ? "" : "\n" + item.Location) + "\nDouble-click to edit" + (item.Recurrence.Freq == RecurrenceFreq.None ? "" : ", right-click to skip"));
+                if (item.Recurrence.Freq != RecurrenceFreq.None)
+                {
+                    var skipDay = DateOnly.FromDateTime(occ.Start);
+                    chip.ContextMenu = new ContextMenu { Items = { Ui.Item($"Skip this occurrence ({skipDay:MMM d})", () => { Events.Skip(item, [skipDay]); Events.Save(); }) } };
+                }
                 // A double-click on an event edits that event; anywhere else in the cell it adds a new one.
                 chip.PointerPressed += (_, e) =>
                 {
@@ -508,7 +513,25 @@ public sealed class EventsPage : UserControl, IPage
                 if (f.TryGetLocalPath() is { } local && !added.Contains(local)) added.Add(local);
             BuildAttachments();
         };
-        var repeatExtras = Ui.Column(10, everyRow, daysRow, endsRow);
+        // Skipped occurrences: dates the event does not happen on, each removable.
+        var skipped = e?.SkippedDates.ToList() ?? [];
+        var skippedList = new StackPanel { Spacing = 3 };
+        void BuildSkipped()
+        {
+            skippedList.Children.Clear();
+            foreach (var day in skipped.ToList())
+                skippedList.Children.Add(new DockPanel
+                {
+                    Children =
+                    {
+                        Ui.IconButton(Icons.Close, "Bring this occurrence back", () => { skipped.Remove(day); BuildSkipped(); }).Dock(Dock.Right),
+                        new TextBlock { Text = $"Skipping {day:ddd yyyy-MM-dd}", VerticalAlignment = VerticalAlignment.Center },
+                    },
+                });
+            skippedList.IsVisible = skippedList.Children.Count > 0;
+        }
+        BuildSkipped();
+        var repeatExtras = Ui.Column(10, everyRow, daysRow, endsRow, skippedList);
 
         void Sync()
         {
@@ -593,6 +616,7 @@ public sealed class EventsPage : UserControl, IPage
             item.Title = title.Text!.Trim();
             item.Kind = kind.SelectedIndex switch { 0 => EventKind.Calendar, 1 => EventKind.Task, _ => EventKind.Timer };
             item.Start = start; item.End = end; item.AllDay = isAllDay; item.Recurrence = rec;
+            item.SkippedDates = rec.Freq == RecurrenceFreq.None ? [] : skipped.ToList();
             item.OnStartScript = string.IsNullOrWhiteSpace(onStart.Text) ? null : onStart.Text;
             item.OnEndScript = string.IsNullOrWhiteSpace(onEnd.Text) || end is null ? null : onEnd.Text;
             item.Notes = string.IsNullOrWhiteSpace(notes.Text) ? null : notes.Text;
