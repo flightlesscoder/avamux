@@ -143,12 +143,15 @@
     s.ws = ws;
     ws.onopen = () => {
       s.term.reset(); // the server replays its buffer on every connect
+      s.replaying = true; // until the server's "replayed" marker has been through the parser
       send(s, { t: 'r', cols: s.term.cols, rows: s.term.rows });
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string') { s.term.write(new Uint8Array(ev.data)); return; }
       let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.t === 'paste') { if (m.text) s.term.paste(m.text); }
+      // Writes are parsed in order, so this callback runs once the whole history before the marker has been.
+      if (m.t === 'replayed') { s.term.write('', () => { if (s.ws === ws) s.replaying = false; }); }
+      else if (m.t === 'paste') { if (m.text) s.term.paste(m.text); }
       else if (m.t === 'dump') send(s, { t: 'dump', n: m.n, text: m.screen ? screenOf(s) : textOf(s, m.lines) });
       else if (m.t === 'exit') { s.exited = true; s.term.write(`\r\n\x1b[2m[process exited with code ${m.code}]\x1b[0m\r\n`); }
     };
@@ -229,18 +232,26 @@
     if (opts.renderer === 'webgl') {
       try { const gl = new WebglAddon.WebglAddon(); gl.onContextLoss(() => gl.dispose()); term.loadAddon(gl); } catch (e) { console.warn('webgl unavailable', e); }
     }
-    const s = { id, el, term, fit, ws: null, exited: false, gone: false, pulse: document.createElement('div'), put: {} };
+    const s = { id, el, term, fit, ws: null, exited: false, gone: false, replaying: false, typed: false, pulse: document.createElement('div'), put: {} };
+    // xterm raises this just before onData for keys and pastes, and not for the answers it sends to queries in the
+    // output. That is how answers to queries in replayed history are told apart from the user typing meanwhile.
+    try { term._core.coreService.onUserInput(() => { s.typed = true; }); } catch { }
     sessions.set(id, s);
     term.onRender(() => pulse(s));
     term.onScroll(() => pulse(s));
     term.textarea.addEventListener('focus', () => pulse(s));
     term.textarea.addEventListener('blur', () => pulse(s));
     try { fit.fit(); } catch { }
-    term.onData(d => send(s, { t: 'i', d }));
+    term.onData(d => {
+      const typed = s.typed;
+      s.typed = false;
+      if (s.replaying && !typed) return; // an answer to a query in the history
+      send(s, { t: 'i', d });
+    });
     term.onBinary(d => send(s, { t: 'b', d: btoa(d) }));
     term.onResize(({ cols, rows }) => send(s, { t: 'r', cols, rows }));
     term.onTitleChange(title => send(s, { t: 'title', title }));
-    term.onBell(() => send(s, { t: 'bell' }));
+    term.onBell(() => { if (!s.replaying) send(s, { t: 'bell' }); }); // an old bell would mark an agent as waiting
     term.onSelectionChange(() => { if (opts.copyOnSelect && term.hasSelection()) copy(s); });
     term.attachCustomKeyEventHandler(ev => onKey(s, ev));
     el.addEventListener('contextmenu', ev => {

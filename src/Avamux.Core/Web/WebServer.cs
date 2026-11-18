@@ -199,6 +199,10 @@ public sealed class WebServer : IAsyncDisposable
         var pump = Task.Run(async () =>
         {
             if (replay.Length > 0) await sock.SendAsync(replay, WebSocketMessageType.Binary);
+            // Everything before this marker is history. The view must not answer queries in it (colour, cursor
+            // position, device attributes): the program that asked is long done, and the answer would arrive at
+            // the shell as typed input.
+            await sock.SendJsonAsync(new JsonObject { ["t"] = "replayed" });
             if (!session.Running) await sock.SendJsonAsync(new JsonObject { ["t"] = "exit", ["code"] = session.ExitCode ?? 0 });
             await foreach (var chunk in queue.Reader.ReadAllAsync())
                 await sock.SendAsync(chunk, WebSocketMessageType.Binary);
