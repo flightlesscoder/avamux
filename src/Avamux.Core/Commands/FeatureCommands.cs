@@ -107,6 +107,7 @@ public sealed partial class CommandRegistry
             ["next"] = next?.Start.ToString("yyyy-MM-dd HH:mm:ss"), ["enabled"] = e.Enabled, ["completed"] = e.Completed,
             ["onStart"] = e.OnStartScript, ["onEnd"] = e.OnEndScript, ["lastRun"] = e.LastRunSummary, ["notes"] = e.Notes,
             ["location"] = e.Location, ["color"] = e.Color,
+            ["skipped"] = e.SkippedDates.Count == 0 ? null : new JsonArray(e.SkippedDates.Select(d => (JsonNode)d.ToString("yyyy-MM-dd")).ToArray()),
             ["attachments"] = e.Attachments.Count == 0 ? null : new JsonArray(e.Attachments.Select(n => (JsonNode)s.Events.AttachmentPath(e, n)).ToArray()),
         };
     }
@@ -123,6 +124,10 @@ public sealed partial class CommandRegistry
         : d.Equals("weekdays", StringComparison.OrdinalIgnoreCase) ? (DayOfWeek)(-1)
         : throw new ArgumentException($"Unknown day '{d}'. Use mon, tue, wed, thu, fri, sat, sun.")).SelectMany(d =>
         (int)d == -1 ? new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday } : [d]).Distinct().ToList();
+
+    /// <summary>Dates separated by spaces or commas, each anything <see cref="TimeParsing.ParseDateTime"/> understands.</summary>
+    private static List<DateOnly> ParseSkipDates(IEnumerable<string> texts) =>
+        texts.SelectMany(t => t.Split([',', ' '], StringSplitOptions.RemoveEmptyEntries)).Select(t => DateOnly.FromDateTime(TimeParsing.ParseDateTime(t))).ToList();
 
     private static void ApplyEventArgs(EventItem e, Args a)
     {
@@ -218,12 +223,31 @@ public sealed partial class CommandRegistry
             var d = TimeParsing.ParseDuration(a.Require("duration"));
             return EventJson(s, s.Events.AddTimer(a.Str("title") is { Length: > 0 } t ? t : $"Timer {RecurrenceCalculator.FormatMinutes(d.TotalMinutes)}", d, a.Str("run")));
         });
-        Add("event edit", "Change an event.", [P("id", "Event id or title.", true), O("title", "New title."), O("kind", "calendar, task or timer."), .. fields, attach, M("detach", "Attachment file name to remove.")], a =>
+        Add("event edit", "Change an event.", [P("id", "Event id or title.", true), O("title", "New title."), O("kind", "calendar, task or timer."), .. fields, attach, M("detach", "Attachment file name to remove."),
+            M("skip", "Date of one occurrence to skip (see event skip). May be repeated."), M("unskip", "Date of a skipped occurrence to bring back. May be repeated.")], a =>
         {
             var e = s.Events.Get(a.Require("id"));
             ApplyEventArgs(e, a);
+            s.Events.Skip(e, ParseSkipDates(a.List("skip")));
+            s.Events.Unskip(e, ParseSkipDates(a.List("unskip")));
             foreach (var f in a.List("attach")) s.Events.Attach(e, f);
             foreach (var f in a.List("detach")) s.Events.Detach(e, Path.GetFileName(f));
+            s.Events.Save();
+            return EventJson(s, e);
+        });
+        Add("event skip", "Skip single occurrences of a repeating event, such as a holiday.",
+            [P("id", "Event id or title.", true), Rest("dates", "Dates to skip: 2026-12-25, tomorrow. The event must occur on each.", true)], a =>
+        {
+            var e = s.Events.Get(a.Require("id"));
+            s.Events.Skip(e, ParseSkipDates(a.List("dates")));
+            s.Events.Save();
+            return EventJson(s, e);
+        });
+        Add("event unskip", "Bring back skipped occurrences of a repeating event.",
+            [P("id", "Event id or title.", true), Rest("dates", "Dates to bring back, as shown by event show.", true)], a =>
+        {
+            var e = s.Events.Get(a.Require("id"));
+            s.Events.Unskip(e, ParseSkipDates(a.List("dates")));
             s.Events.Save();
             return EventJson(s, e);
         });
