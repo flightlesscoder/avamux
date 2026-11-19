@@ -100,6 +100,8 @@ public sealed partial class CommandRegistry
         Add("browser console", "Console messages of the pane's pages, oldest first.", [.. log, O("level", "log, info, warn, error or debug.")], a => s.Browser.LogAsync(a, "console"));
         Add("browser errors", "JavaScript errors and failed loads of the pane's pages.", log, a => s.Browser.LogAsync(a, "errors"));
         Add("browser network", "Requests the pane's pages made (fetch, XHR, scripts, images…).", [.. log, F("failed", "Only failures and HTTP errors.")], a => s.Browser.LogAsync(a, "net"));
+        Add("browser messages", "Messages posted to the main page with postMessage (from its iframes, cross-origin ones included, or by itself), oldest first.",
+            [.. log, O("origin", "Only messages from an origin containing this.")], a => s.Browser.LogAsync(a, "messages"));
         Add("browser highlight", "Outline an element in the page for a moment.", [target, O("ms", "How long (default 2000)."), surface], a => s.Browser.HighlightAsync(a));
 
         Add("browser cookies", "Cookies of the page's site that scripts can see: get [name], set <name> <value>, clear <name>|--all.",
@@ -114,8 +116,13 @@ public sealed partial class CommandRegistry
             [P("action", "status (default), accept or dismiss."), Rest("text", "accept: the answer to a prompt."), surface], a => s.Browser.DialogAsync(a));
         Add("browser tab", "The panes in this tab's dock: list, new [url], switch <index|id>, close [index|id].",
             [P("action", "list (default), new, switch or close."), P("target", "new: address; switch/close: index or id."), F("focus", "Bring it to the front."), surface], a => s.Browser.TabAsync(a));
-        Add("browser frame", "Work inside an iframe (same site only) from now on, or go back to the main page.", [P("target", "The iframe (selector or ref), or main.", true), surface], a => s.Browser.FrameAsync(a));
+        Add("browser frame", "Work inside an iframe (same site only; for cross-origin ones see addinitscript) from now on, or go back to the main page.", [P("target", "The iframe (selector or ref), or main.", true), surface], a => s.Browser.FrameAsync(a));
 
+        Add("browser addinitscript", "Run a script at the start of every page from the next load on, before the page's own scripts, in every frame (cross-origin iframes too).",
+            [Rest("script", "The script."), O("file", "Read the script from this file instead."), F("main-frame", "Only in the main page, not in its frames."), surface],
+            a => s.Browser.AddInitScriptAsync(a));
+        Add("browser initscripts", "The pane's init scripts: list (default), remove <id> or clear.",
+            [P("action", "list, remove or clear."), P("id", "remove: which (i1, i2, …)."), surface], a => s.Browser.InitScriptsAsync(a));
         Add("browser devtools", "The Web Inspector: open, close, toggle, attach (inside the pane, which must be 750 px wide or more), detach (own window) or status.", [P("action", "Default toggle."), surface], a => s.Browser.DevToolsAsync(a));
         Add("browser keep-alive", "Keep the page running and believing it is visible while something else is in front: on, off or status.", [P("action", "on, off or status."), surface], a => s.Browser.KeepAliveAsync(a));
         Add("browser zoom", "Zoom the page: in, out, reset, or a factor such as 1.25.", [P("level", "in, out, reset, a factor, or nothing to show it."), surface], a => s.Browser.ZoomAsync(a));

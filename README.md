@@ -298,6 +298,12 @@ visible|enabled|checked`, `hover`, `focus`, `type`, `press "Control+a Backspace"
 takes `--surface b2` to name another pane. `avamux browser /?` lists them all. Errors start with a code an agent can
 act on: `not_found` (a stale ref: snapshot again), `invalid_state`, `timeout`, `js_error`, `not_supported`.
 
+`frame` only reaches iframes of the same site. For a cross-origin iframe, `addinitscript` (as in cmux) adds a script
+that runs at the start of every page from the next load on, before the page's own scripts, in every frame, cross-origin
+ones included (`--main-frame` for the main page only; on WebKitGTK). The script can `postMessage` what it finds to the
+main page, and `avamux browser messages` lists what the main page received (origin, which frame, data).
+`initscripts` lists them, `initscripts remove i1` and `initscripts clear` take them away.
+
 `avamux browser skill --install` puts an `avamux-browser` skill for Claude Code (and Codex, when installed) in
 `~/.claude/skills`, so agents know all this without being told. With `browser.setBrowserVariable`, new terminals
 also get `BROWSER` pointing at avamux, so a program that opens a web page (a CLI login, a dev server's `--open`)

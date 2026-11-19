@@ -29,6 +29,8 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
     private readonly TextBlock _blank = new() { Text = "", Foreground = Ui.Dim, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private string _initialUrl;
     private IntPtr _view, _userScript, _dialog;
+    private readonly List<IntPtr> _initScriptHandles = [];
+    private IReadOnlyList<BrowserInitScript> _initScripts = [];
     private bool _adapterReady, _addressEditing;
     private int _errorsOnPage;
     private bool _audible, _muted, _canBack, _canForward;
@@ -278,6 +280,7 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
                 _view = view;
                 await WebKitGtk.ConnectAsync(view, this);
                 _userScript = await WebKitGtk.AddUserScriptAsync(view, BrowserService.AgentScript(KeepAlive));
+                await InstallInitScriptsAsync();
                 if (Math.Abs(Zoom - 1) > 0.001) await WebKitGtk.SetZoomAsync(view, Zoom);
             }
         }
@@ -370,9 +373,26 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
             // The document-start script carries the setting into later pages; the current page is told directly.
             await WebKitGtk.RemoveUserScriptAsync(_view, _userScript);
             _userScript = await WebKitGtk.AddUserScriptAsync(_view, BrowserService.AgentScript(on));
+            await InstallInitScriptsAsync(); // after the agent again, so it still sees what they log
         }
         try { await Web.InvokeScript(BrowserService.Wrap($"window.__avx.keepAlive({(on ? "true" : "false")})", on)); } catch { }
         BrowserHost.Instance.Sync();
+    }
+
+    /// <summary>Replaces the scripts that run at the start of every page (after the agent, before the page's own).</summary>
+    public async Task SetInitScriptsAsync(IReadOnlyList<BrowserInitScript> scripts)
+    {
+        if (!WebKitGtk.Supported)
+            throw new BrowserException("not_supported", "Scripts at the start of every page need WebKitGTK; on this system run them after the load with `avamux browser eval`.");
+        _initScripts = scripts.ToList();
+        if (_view != IntPtr.Zero) await InstallInitScriptsAsync(); // otherwise when the view is set up
+    }
+
+    private async Task InstallInitScriptsAsync()
+    {
+        foreach (var handle in _initScriptHandles) await WebKitGtk.RemoveUserScriptAsync(_view, handle);
+        _initScriptHandles.Clear();
+        foreach (var script in _initScripts) _initScriptHandles.Add(await WebKitGtk.AddUserScriptAsync(_view, script.Source, script.MainFrameOnly));
     }
 
     public async Task<string> DevToolsAsync(string action)
