@@ -50,6 +50,46 @@ public static class WebViews
         catch (Exception ex) { Log.Warn("web", "Could not focus the web view: " + ex.Message); }
     }
 
+    /// <summary>
+    /// Gives a web view the keyboard when it is clicked. On Linux the page's X window never takes it by itself (only a
+    /// click on a text field asks for it), so without this a click into the page, or back into a terminal after using
+    /// the page, leaves the keys going wherever they went before.
+    /// </summary>
+    public static void FocusOnClick(NativeWebView web)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var view = IntPtr.Zero;
+        web.AdapterCreated += (_, _) =>
+        {
+            if (web.TryGetPlatformHandle() is not IGtkWebViewPlatformHandle { WebKitWebView: var v } || v == IntPtr.Zero) return;
+            view = v;
+            _ = Browser.WebKitGtk.WatchPressesAsync(v, () => Avalonia.Threading.Dispatcher.UIThread.Post(() => FocusNative(web)));
+        };
+        web.AdapterDestroyed += (_, _) =>
+        {
+            if (view != IntPtr.Zero) Browser.WebKitGtk.UnwatchPresses(view);
+            view = IntPtr.Zero;
+        };
+    }
+
+    /// <summary>
+    /// Takes the keyboard back from a web view for the window itself (an address bar, a text box). The counterpart of
+    /// <see cref="FocusNative"/>: X would otherwise keep sending keys to the web view that had them last.
+    /// </summary>
+    public static void FocusWindow(Window window)
+    {
+        if (!OperatingSystem.IsLinux() || !window.IsActive) return;
+        try
+        {
+            if (window.TryGetPlatformHandle() is not { HandleDescriptor: "XID" } handle || handle.Handle == IntPtr.Zero) return;
+            if (s_display == IntPtr.Zero) s_display = XOpenDisplay(IntPtr.Zero);
+            if (s_display == IntPtr.Zero) return;
+            XSetInputFocus(s_display, handle.Handle, RevertToParent, CurrentTime);
+            XFlush(s_display);
+        }
+        catch (Exception ex) { Log.Warn("web", "Could not take the keyboard back from a web view: " + ex.Message); }
+    }
+
     private static IntPtr s_display;
     private const int RevertToParent = 2;
     private static readonly IntPtr CurrentTime = IntPtr.Zero;

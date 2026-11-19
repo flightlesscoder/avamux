@@ -88,6 +88,8 @@ public sealed class DashboardPage : UserControl, IPage
         };
         Content = new DockPanel { Children = { bar.Dock(Dock.Top), _panel.Dock(Dock.Right), _web } };
 
+        WebViews.FocusOnClick(_web);
+
         _web.EnvironmentRequested += (_, e) => WebViews.Configure(e);
         _web.NewWindowRequested += (_, e) =>
         {

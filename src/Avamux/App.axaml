@@ -11,6 +11,13 @@
       <Setter Property="Padding" Value="6" />
       <Setter Property="CornerRadius" Value="6" />
     </Style>
+    <!-- Browser toolbar buttons: a disabled one (no page to go back to) fades rather than turning into a grey box. -->
+    <Style Selector="Button.tool:disabled /template/ ContentPresenter">
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.tool:disabled">
+      <Setter Property="Opacity" Value="0.35" />
+    </Style>
     <Style Selector="PathIcon">
       <Setter Property="Width" Value="16" />
       <Setter Property="Height" Value="16" />

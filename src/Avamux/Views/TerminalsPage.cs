@@ -7,6 +7,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avamux.Core.Logging;
+using Avamux.Browser;
 using Avamux.Core.Terminal;
 
 namespace Avamux.Views;
@@ -69,6 +70,8 @@ public sealed class TerminalWindow : AppWindow
         Page = new TerminalsPage(group);
         Body = Page;
         Page.Emptied += Close;
+        // Browser panes beside its tabs go back with them; their pages must not go with the window.
+        Closing += (_, _) => Page.ReleaseBrowser();
     }
 
     public string Group { get; }
@@ -86,6 +89,10 @@ public sealed class TerminalsPage : UserControl, IPage
     {
         Text = "Starting terminal engine…", Foreground = Ui.Dim, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
     };
+    private readonly BrowserDock _dock = new() { IsVisible = false };
+    private readonly GridSplitter _splitter = new() { Width = 5, ResizeDirection = GridResizeDirection.Columns, IsVisible = false, Background = Brushes.Transparent };
+    private readonly Grid _split = new() { ColumnDefinitions = new ColumnDefinitions("*,Auto,0") };
+    private readonly Button _globe;
     private readonly HashSet<string> _opened = [];
     private bool _ready, _hadTabs;
     private string? _editingId;
@@ -105,6 +112,7 @@ public sealed class TerminalsPage : UserControl, IPage
             if (SelectedId is not { } id) return;
             if (_group is null) TerminalLayout.OpenWindow(id, TopLevel.GetTopLevel(this) as Window); else TerminalLayout.Move(id, null);
         });
+        _globe = Ui.IconButton(Icons.Web, "Browser beside this tab (Ctrl+Shift+L)", ToggleBrowser);
         var strip = new Border
         {
             Background = Ui.Tk("bgDeep"), BorderBrush = Ui.Tk("lineSoft"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(6, 4, 6, 0),
@@ -112,15 +120,26 @@ public sealed class TerminalsPage : UserControl, IPage
             {
                 Children =
                 {
-                    Ui.Row(0, add, detach).Dock(Dock.Right),
+                    Ui.Row(0, _globe, add, detach).Dock(Dock.Right),
                     new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Hidden, VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = _tabs },
                 },
             },
         };
         _termPanel.Children.Add(_web);
         _termPanel.Children.Add(_overlay);
-        Content = new DockPanel { Children = { strip.Dock(Dock.Top), _termPanel } };
+        _split.ColumnDefinitions[0].MinWidth = 200;
+        _split.Children.Add(_termPanel.At(0, 0));
+        _split.Children.Add(_splitter.At(0, 1));
+        _split.Children.Add(_dock.At(0, 2));
+        _splitter.DragCompleted += (_, _) =>
+        {
+            App.Services.Ui.Data.BrowserDockWidth = Math.Round(_split.ColumnDefinitions[2].ActualWidth);
+            App.Services.Ui.SaveSoon();
+        };
+        Content = new DockPanel { Children = { strip.Dock(Dock.Top), _split } };
         ApplyBackground();
+
+        WebViews.FocusOnClick(_web);
 
         _web.EnvironmentRequested += (_, e) => WebViews.Configure(e);
         _web.WebMessageReceived += OnWebMessage;
@@ -137,6 +156,8 @@ public sealed class TerminalsPage : UserControl, IPage
         Manager.Changed += refresh;
         Manager.Closed += closed;
         TerminalLayout.Changed += refresh;
+        var browsers = Ui.Debounced(UpdateDock, 20);
+        BrowserHost.Instance.Changed += browsers;
         App.Services.Config.Changed += config;
         Ui.ThemeChanged += config;
         // A detached window goes away; the main page lives as long as the app.
@@ -144,6 +165,7 @@ public sealed class TerminalsPage : UserControl, IPage
         {
             if (_group is null) return;
             Manager.Changed -= refresh; Manager.Closed -= closed; TerminalLayout.Changed -= refresh; App.Services.Config.Changed -= config; Ui.ThemeChanged -= config;
+            BrowserHost.Instance.Changed -= browsers;
         };
 
         // Coming back to the window (Alt+Tab, closing a dialog) hands the keyboard to the window, not to the
@@ -262,10 +284,44 @@ public sealed class TerminalsPage : UserControl, IPage
                 case "next": Step(1); break;
                 case "prev": Step(-1); break;
                 case "boss": Ui.Main?.ToggleBoss(null); break;
+                case "browser": ToggleBrowser(); break;
             }
         }
         catch (Exception ex) { Log.Warn("terminal", "Bad message from terminal view: " + ex.Message); }
     }
+
+    /// <summary>The globe button and Ctrl+Shift+L: open a browser beside this tab, or show / hide the one it has.</summary>
+    private void ToggleBrowser()
+    {
+        if (SelectedId is not { } id) return;
+        var host = BrowserHost.Instance;
+        if (host.DockedFor(id).Count == 0) { BrowserDock.NewTab(id); return; }
+        var hide = !host.IsDockHidden(id);
+        host.SetDockHidden(id, hide);
+        if (hide) QueueFocus();
+        else if (host.ActiveFor(id) is { } s) Dispatcher.UIThread.Post(s.FocusPage, DispatcherPriority.Background);
+    }
+
+    /// <summary>Shows the browser panes of the selected tab beside it (or nothing, when it has none).</summary>
+    private void UpdateDock()
+    {
+        var host = BrowserHost.Instance;
+        var has = _dock.ShowFor(SelectedId);
+        var show = has && SelectedId is not null && !host.IsDockHidden(SelectedId);
+        if (show != _dock.IsVisible)
+        {
+            _dock.IsVisible = show;
+            _splitter.IsVisible = show;
+            var width = Math.Clamp(App.Services.Ui.Data.BrowserDockWidth, 240, 4000);
+            _split.ColumnDefinitions[2] = new ColumnDefinition(show ? new GridLength(width) : new GridLength(0)) { MinWidth = show ? 240 : 0 };
+        }
+        ((PathIcon)((StackPanel)_globe.Content!).Children[0]).Foreground = has ? Ui.Tk("accent") : null;
+        ToolTip.SetTip(_globe, !has ? "Open a browser beside this tab (Ctrl+Shift+L)" : show ? "Hide the browser beside this tab (Ctrl+Shift+L)" : "Show the browser beside this tab (Ctrl+Shift+L)");
+        host.Sync();
+    }
+
+    /// <summary>Gives back the browser pane shown in this page's dock (its window is closing).</summary>
+    public void ReleaseBrowser() => _dock.Release();
 
     private void Step(int delta)
     {
@@ -295,6 +351,7 @@ public sealed class TerminalsPage : UserControl, IPage
         if (Manager.Find(id) is not { } s || TerminalLayout.GroupOf(s.Id) != _group) return;
         SelectedId = s.Id;
         RebuildTabs();
+        UpdateDock();
         if (_ready) _ = ShowAsync(s.Id);
         // A window in the background must not take the keyboard (it happens here when a tab moves out of it and
         // the next tab is selected); it gets the terminal focused when it is activated again.
@@ -330,6 +387,7 @@ public sealed class TerminalsPage : UserControl, IPage
         _ = SyncViewAsync();
         _tabs.Children.Clear();
         foreach (var s in sessions) _tabs.Children.Add(BuildTab(s));
+        UpdateDock();
         if (TopLevel.GetTopLevel(this) is TerminalWindow w) w.Title = sessions.FirstOrDefault(s => s.Id == SelectedId) is { } sel ? $"{sel.Title} — avamux" : "avamux terminals";
     }
 
@@ -381,6 +439,8 @@ public sealed class TerminalsPage : UserControl, IPage
             if (!p.IsLeftButtonPressed) return;
             if (e.ClickCount >= 2) BeginRename(s, row, title);
             else if (SelectedId != s.Id) Select(s.Id);
+            // The tab already in front: the click still means "type here", wherever the keyboard was.
+            else FocusTerminal();
         };
 
         var menu = new ContextMenu();

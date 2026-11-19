@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.VisualTree;
 using Avamux.Core.Theming;
 
 namespace Avamux.Views;
@@ -52,7 +53,8 @@ public class AppWindow : Window
             if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
             if (e.ClickCount >= 2 && CanResize) ToggleMaximize(); else BeginMoveDrag(e);
         };
-        _frame.Child = new DockPanel { Children = { _titleBar.Dock(Dock.Top), _body } };
+        _frame.Child = new Panel { Children = { new DockPanel { Children = { _titleBar.Dock(Dock.Top), _body } }, ParkingLot } };
+        ParkingLot.SizeChanged += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(() => Avamux.Browser.BrowserHost.Instance.Sync());
         Content = _frame;
 
         // The frame's border is the resize grip while the window draws its own chrome.
@@ -62,6 +64,14 @@ public class AppWindow : Window
             if (_custom && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && EdgeAt(e.GetPosition(this)) is { } edge) { BeginResizeDrag(edge, e); e.Handled = true; }
         };
 
+        // Whatever of the window's own takes the keyboard (a text box clicked, an address bar after Ctrl+L, a rename
+        // box) must get it from X too, or the keys keep going to the web view (a terminal, a page) that had them.
+        // Buttons are left out: clicking one should not pull the keyboard out of the terminal.
+        AddHandler(GotFocusEvent, (_, e) =>
+        {
+            if (e.Source is Button || e.Source is Visual v && (v is NativeWebView || v.FindAncestorOfType<NativeWebView>() is not null)) return;
+            WebViews.FocusWindow(this);
+        }, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
         Ui.ThemeChanged += ApplyChrome;
         Closed += (_, _) => Ui.ThemeChanged -= ApplyChrome;
         PropertyChanged += (_, e) =>
@@ -70,6 +80,24 @@ public class AppWindow : Window
             else if (e.Property == WindowStateProperty || e.Property == CanResizeProperty) ApplyChrome();
         };
         ApplyChrome();
+    }
+
+    /// <summary>
+    /// Where browser panes' web views wait while their pane is out of view, so their pages live on. Nothing in it is
+    /// ever seen: see <see cref="Avamux.Browser.BrowserHost"/>.
+    /// </summary>
+    public Canvas ParkingLot { get; } = new() { IsHitTestVisible = false, ClipToBounds = false };
+
+    /// <summary>Set once the window has agreed to close: nothing should be parked in it any more.</summary>
+    public bool IsClosing { get; private set; }
+
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        base.OnClosing(e);
+        if (e.Cancel) return;
+        IsClosing = true;
+        // Browser pages in this window (on screen or parked) would go down with it.
+        Avamux.Browser.BrowserHost.Instance.Evacuate(this);
     }
 
     /// <summary>The window's content.</summary>

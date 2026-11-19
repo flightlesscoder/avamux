@@ -41,6 +41,7 @@ public partial class App : Application
             var window = new MainWindow();
             Services.Host = new AppHost(window, desktop);
             desktop.MainWindow = window;
+            Avamux.Browser.BrowserHost.Instance.Start();
             _ipc = new IpcServer(Services.Paths.SocketPath, Services.Commands);
             _ipc.Start();
             desktop.ShutdownRequested += (_, _) => Shutdown();

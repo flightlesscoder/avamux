@@ -253,7 +253,8 @@ public sealed class WebServer : IAsyncDisposable
                 if (!string.IsNullOrEmpty(clip)) await sock.SendJsonAsync(new JsonObject { ["t"] = "paste", ["text"] = clip });
                 break;
             case "open":
-                if (m["url"]?.GetValue<string>() is { } url && (url.StartsWith("http://") || url.StartsWith("https://"))) Shell.Open(url);
+                if (m["url"]?.GetValue<string>() is { } url && (url.StartsWith("http://") || url.StartsWith("https://")))
+                    await _app.Browser.OpenLinkAsync(session.Id, url, m["mod"]?.GetValue<bool>() == true);
                 break;
             case "dump":
                 if (_dumps.TryRemove(m["n"]!.GetValue<int>(), out var tcs)) tcs.TrySetResult(m["text"]?.GetValue<string>());

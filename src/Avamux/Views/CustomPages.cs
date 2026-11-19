@@ -95,6 +95,8 @@ public sealed class CustomTerminalPage : UserControl, ICustomPage
         Content = new DockPanel { Children = { _ended.Dock(Dock.Top), _termPanel } };
         ApplyBackground();
 
+        WebViews.FocusOnClick(_web);
+
         _web.EnvironmentRequested += (_, e) => WebViews.Configure(e);
         _web.WebMessageReceived += (_, e) => { if (e.Body?.Contains("\"ready\"", StringComparison.Ordinal) == true) _ = OnPageReadyAsync(); };
         _web.NavigationCompleted += (_, e) =>
@@ -273,6 +275,8 @@ public sealed class CustomWebPage : UserControl, ICustomPage
         };
         Content = new DockPanel { Children = { bar.Dock(Dock.Top), _web } };
         _address.Text = item.Url;
+
+        WebViews.FocusOnClick(_web);
 
         _web.EnvironmentRequested += (_, e) => e.EnableDevTools = true;
         _web.NewWindowRequested += (_, e) =>

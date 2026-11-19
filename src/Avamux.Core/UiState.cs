@@ -15,6 +15,8 @@ public sealed class UiStateData
     public bool EventDescriptionPreview { get; set; } = true;
     /// <summary>Which calendar the Events page shows: month, week or day.</summary>
     public string EventsView { get; set; } = "month";
+    /// <summary>Width of the browser dock beside the terminals, in pixels.</summary>
+    public double BrowserDockWidth { get; set; } = 560;
     public bool PullRequestsMineOnly { get; set; }
     public bool PullRequestsActiveOnly { get; set; } = true;
     /// <summary>Search sources that are switched off. Empty means everything is searched.</summary>

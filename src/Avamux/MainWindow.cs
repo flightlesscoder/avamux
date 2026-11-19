@@ -125,6 +125,7 @@ public sealed class MainWindow : AppWindow
             _toastPopup.IsOpen = false;
             _main.IsVisible = false;
             _boss.IsVisible = true;
+            Avamux.Browser.BrowserHost.Instance.Sync();
             App.Services.Sounds.Quiet = true;
             if (ui.BossHidesWindows && Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime life)
                 foreach (var w in life.Windows.Where(w => w != this && w.IsVisible && w.WindowState != WindowState.Minimized).ToList())
@@ -139,6 +140,7 @@ public sealed class MainWindow : AppWindow
             _boss.IsVisible = false;
             _boss.Content = null;
             _main.IsVisible = true;
+            Avamux.Browser.BrowserHost.Instance.Sync();
             Title = _realTitle ?? "avamux";
             App.Services.Sounds.Quiet = false;
             foreach (var w in _hiddenForBoss) w.WindowState = WindowState.Normal;
@@ -336,6 +338,8 @@ public sealed class MainWindow : AppWindow
         var page = GetOrCreate(key);
         var leaving = CurrentPage != key && _pages.GetValueOrDefault(CurrentPage) is ICustomPage { } old && old is Control { IsVisible: true } ? old : null;
         foreach (var p in _pages.Values) p.IsVisible = ReferenceEquals(p, page);
+        // Before the hidden pages' web views are taken off screen: browser panes kept alive move to the parking layer.
+        Avamux.Browser.BrowserHost.Instance.Sync();
         CurrentPage = key;
         leaving?.OnHidden();
         (page as IPage)?.OnShown();
