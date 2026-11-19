@@ -95,6 +95,7 @@ public sealed class RepoService
             return _state.Items.FirstOrDefault(r => r.Id == idOrName)
                 ?? _state.Items.FirstOrDefault(r => string.Equals(r.Name, idOrName, StringComparison.OrdinalIgnoreCase))
                 ?? _state.Items.FirstOrDefault(r => r.Path == System.IO.Path.GetFullPath(idOrName))
+                ?? _state.Items.FirstOrDefault(r => SamePath(r.Path, idOrName))
                 ?? _builtIn.FirstOrDefault(r => r.Id == idOrName)
                 ?? _builtIn.FirstOrDefault(r => string.Equals(r.Name, idOrName, StringComparison.OrdinalIgnoreCase));
     }
@@ -113,14 +114,44 @@ public sealed class RepoService
         return r.ExitCode == 0 && SamePath(r.Stdout.Trim(), repo.Path);
     }
 
-    private static bool SamePath(string a, string b)
+    internal static bool SamePath(string a, string b) =>
+        a.TrimEnd('/') == b.TrimEnd('/')
+        || System.IO.Path.GetFullPath(a).TrimEnd('/') == System.IO.Path.GetFullPath(b).TrimEnd('/')
+        || RealPath(a) == RealPath(b);
+
+    /// <summary>
+    /// The path with every symbolic link in it followed, ancestors included, without a trailing separator.
+    /// Following only the last part is not enough: on macOS /var links to private/var, so git reports
+    /// /private/var/... for a repository the caller knows as /var/... (anything under the temp folder).
+    /// The path is walked from its root and each prefix resolved in turn; a link's target may hold links
+    /// of its own and "..", which are resolved the same way. Parts that do not exist are kept as written.
+    /// </summary>
+    public static string RealPath(string path)
     {
-        static string Real(string p)
+        var full = System.IO.Path.GetFullPath(path);
+        var root = System.IO.Path.GetPathRoot(full) ?? "";
+        var current = root;
+        var pending = new Stack<string>(Parts(full[root.Length..]).Reverse());
+        var links = 0;
+        while (pending.Count > 0)
         {
-            p = System.IO.Path.GetFullPath(p);
-            try { return (Directory.ResolveLinkTarget(p, true)?.FullName ?? p).TrimEnd('/'); } catch { return p.TrimEnd('/'); }
+            var part = pending.Pop();
+            if (part == ".") continue;
+            if (part == "..") { current = System.IO.Path.GetDirectoryName(current) ?? current; continue; }
+            var next = System.IO.Path.Combine(current, part);
+            string? target = null;
+            try { target = new FileInfo(next).LinkTarget; } catch { }
+            if (target is null) { current = next; continue; }
+            if (++links > 40) return full.TrimEnd('/'); // a loop of links
+            // The target's own parts go back on the stack, so links and ".." inside it are walked too.
+            var targetRoot = System.IO.Path.GetPathRoot(target) ?? "";
+            if (targetRoot.Length > 0) current = targetRoot;
+            foreach (var p in Parts(target[targetRoot.Length..]).Reverse()) pending.Push(p);
         }
-        return a.TrimEnd('/') == b.TrimEnd('/') || Real(a) == Real(b) || System.IO.Path.GetFullPath(a).TrimEnd('/') == System.IO.Path.GetFullPath(b).TrimEnd('/');
+        return current.Length > root.Length ? current.TrimEnd('/', System.IO.Path.DirectorySeparatorChar) : current;
+
+        static string[] Parts(string p) =>
+            p.Split([System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
     }
 
     /// <summary>Makes the folder a git repository. Nothing is committed.</summary>
@@ -162,7 +193,7 @@ public sealed class RepoService
         RepoEntry entry;
         lock (_gate)
         {
-            if (_state.Items.FirstOrDefault(r => r.Path == path) is { } existing) return existing;
+            if (_state.Items.FirstOrDefault(r => SamePath(r.Path, path)) is { } existing) return existing;
             entry = new RepoEntry { Id = Watching.WatchService.NewId(_state.Items.Select(i => i.Id)), Name = string.IsNullOrWhiteSpace(name) ? System.IO.Path.GetFileName(path) : name!, Path = path };
             _state.Items.Add(entry);
         }

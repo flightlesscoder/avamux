@@ -608,6 +608,35 @@ public class RepoTests
         Assert.Equal("first", Assert.Single(await repos.LogAsync(repo)).Subject);
         Assert.Same(repo, await repos.AddAsync(dir)); // adding twice does not duplicate
     }
+
+    [Fact]
+    public void A_real_path_follows_links_in_every_part_not_only_the_last()
+    {
+        if (OperatingSystem.IsWindows()) return; // links need privileges there
+        using var box = new Sandbox();
+        var real = Path.Combine(box.Root, "private", "var");
+        Directory.CreateDirectory(Path.Combine(real, "folders", "repo"));
+        var varLink = Path.Combine(box.Root, "var");
+        Directory.CreateSymbolicLink(varLink, Path.Combine("private", "var")); // like macOS's /var -> private/var
+        var expected = Path.Combine(RepoService.RealPath(real), "folders", "repo");
+
+        // The link is an ancestor, not the leaf.
+        Assert.Equal(expected, RepoService.RealPath(Path.Combine(varLink, "folders", "repo")));
+        Assert.Equal(expected, RepoService.RealPath(Path.Combine(varLink, "folders", "repo") + "/"));
+        Assert.True(RepoService.SamePath(Path.Combine(varLink, "folders", "repo"), expected));
+
+        // A link to a link, an absolute target and ".." inside a target.
+        Directory.CreateSymbolicLink(Path.Combine(box.Root, "abs"), varLink);
+        Directory.CreateSymbolicLink(Path.Combine(box.Root, "up"), Path.Combine("var", "folders", "..", "folders"));
+        Assert.Equal(expected, RepoService.RealPath(Path.Combine(box.Root, "abs", "folders", "repo")));
+        Assert.Equal(expected, RepoService.RealPath(Path.Combine(box.Root, "up", "repo")));
+
+        // Parts that do not exist are kept; a loop of links does not hang.
+        Assert.Equal(Path.Combine(expected, "not", "there"), RepoService.RealPath(Path.Combine(varLink, "folders", "repo", "not", "there")));
+        Directory.CreateSymbolicLink(Path.Combine(box.Root, "loop"), "loop");
+        Assert.EndsWith("loop", RepoService.RealPath(Path.Combine(box.Root, "loop")));
+        Assert.Equal("/", RepoService.RealPath("/"));
+    }
 }
 
 public class WikiTests
