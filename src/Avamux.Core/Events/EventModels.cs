@@ -53,6 +53,19 @@ public sealed record Occurrence(DateTime Start, DateTime? End)
     public DateTime EffectiveEnd => End ?? Start;
 }
 
+/// <summary>An event script that is running right now, started by a trigger or by "run now".</summary>
+public sealed class RunningScript
+{
+    internal readonly CancellationTokenSource Cancel = new();
+    public required EventItem Item { get; init; }
+    /// <summary>"start" or "end".</summary>
+    public required string Phase { get; init; }
+    public required string Script { get; init; }
+    public DateTime Started { get; init; }
+    /// <summary>Set when someone asked for it to be stopped.</summary>
+    public bool Stopping { get; internal set; }
+}
+
 public sealed class EventState
 {
     public List<EventItem> Items { get; set; } = [];
