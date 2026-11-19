@@ -210,6 +210,8 @@
     if (pasteCombo) { send(s, { t: 'paste' }); ev.preventDefault(); return false; }
     if (ev.ctrlKey && ev.shiftKey && (k === 't' || k === 'w')) { post({ t: k === 't' ? 'new' : 'close' }); ev.preventDefault(); return false; }
     if (isBossKey(ev)) { post({ t: 'boss' }); ev.preventDefault(); return false; }
+    // Ctrl+Shift+L: the browser beside this tab (open one, or show / hide it).
+    if (ev.ctrlKey && ev.shiftKey && k === 'l') { post({ t: 'browser' }); ev.preventDefault(); return false; }
     if (ev.ctrlKey && (ev.key === 'PageUp' || ev.key === 'PageDown')) { post({ t: ev.key === 'PageUp' ? 'prev' : 'next' }); ev.preventDefault(); return false; }
     return true; // everything else (Ctrl+B, Ctrl+C, Alt+…) goes to the program in the terminal
   }
@@ -227,7 +229,7 @@
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     try { term.loadAddon(new Unicode11Addon.Unicode11Addon()); term.unicode.activeVersion = '11'; } catch (e) { console.warn(e); }
-    try { term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => send(s, { t: 'open', url: uri }))); } catch (e) { console.warn(e); }
+    try { term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => send(s, { t: 'open', url: uri, mod: !!(e && (e.ctrlKey || e.metaKey)) }))); } catch (e) { console.warn(e); }
     term.open(el);
     if (opts.renderer === 'webgl') {
       try { const gl = new WebglAddon.WebglAddon(); gl.onContextLoss(() => gl.dispose()); term.loadAddon(gl); } catch (e) { console.warn('webgl unavailable', e); }

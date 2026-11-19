@@ -89,6 +89,14 @@ public sealed class SettingsPage : UserControl, IPage
         ["ui.bossKey"] = ("Boss key", "Swaps the window for the boss screen and back (Esc also brings avamux back). Written like Ctrl+Shift+B or F12; empty turns it off."),
         ["ui.bossScreen"] = ("Boss screen", "What it pretends to be: a budget spreadsheet, or a build that never quite finishes."),
         ["ui.bossHidesWindows"] = ("Boss screen minimizes other windows", "Also minimize avamux's other windows (detached terminals, the theme editor, …) while it is up."),
+        ["browser.agentControl"] = ("Let agents drive the browser", "`avamux browser` commands (and the AI agents in terminal tabs that run them) can open panes, read pages, click and type. Off, only listing works."),
+        ["browser.homePage"] = ("Home page", "Address a new browser pane opens when none is given."),
+        ["browser.searchUrl"] = ("Search", "Where words typed in the address bar are searched for; {query} is replaced by them."),
+        ["browser.keepAliveByDefault"] = ("Keep new panes alive", "New panes keep running, and believe they are visible, while another tab or page is in front. Each pane has its own pin to change it."),
+        ["browser.terminalLinksInPane"] = ("Open terminal links beside the tab", "A plain click on a link in a terminal opens it in the tab's browser pane; Ctrl+click opens the system browser. Off, it is the other way round."),
+        ["browser.externalSites"] = ("Sites for the system browser", "Links to these always open in the system browser: host names or *.example.com, separated by commas."),
+        ["browser.developerTools"] = ("Developer tools", "The Web Inspector in browser panes (F12). Applies to panes opened afterwards."),
+        ["browser.setBrowserVariable"] = ("Set BROWSER in terminals", "Programs that open a web page (a login, a dev server's --open) open it in the tab's browser pane. Applies to new terminals."),
         ["caffeine.graceMinutes"] = ("Minutes awake after terminals finish", "\"While terminals are busy\" keeps the computer awake this long after the last one goes quiet."),
         ["caffeine.keepDisplayOn"] = ("Keep the screen on", "Stop the screen blanking or locking too, not just the computer sleeping."),
     };
@@ -109,7 +117,7 @@ public sealed class SettingsPage : UserControl, IPage
 
     private static readonly (string Key, string Title)[] Sections =
     [
-        ("ui", "Window"), ("theme", "Themes"), ("caffeine", "Caffeine"), ("terminal", "Terminals"), ("watching", "Watching"), ("events", "Events"), ("wiki", "Wiki"),
+        ("ui", "Window"), ("theme", "Themes"), ("caffeine", "Caffeine"), ("terminal", "Terminals"), ("browser", "Browser panes"), ("watching", "Watching"), ("events", "Events"), ("wiki", "Wiki"),
         ("logs", "Logs"), ("dashboard", "Dashboard"), ("repositories", "Repositories"), ("ai", "AI Workloads"),
     ];
 

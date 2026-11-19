@@ -53,6 +53,13 @@ public static class CliParser
         {
             var a = args[i];
             if (!literal && a == "--") { literal = true; continue; }
+            if (!literal && a.Length == 2 && a[0] == '-' && char.IsLetter(a[1]) && def.Params.FirstOrDefault(x => x.Short == a[1]) is { } sp)
+            {
+                if (sp.Flag) { result[sp.Name] = true; continue; }
+                if (i + 1 >= args.Count) return new(def, result, false, def.Name, json, $"Option '{a}' needs a value.");
+                result[sp.Name] = args[++i];
+                continue;
+            }
             if (!literal && a.StartsWith("--") && a.Length > 2)
             {
                 var key = a[2..];
@@ -129,7 +136,7 @@ public static class CliParser
                 sb.AppendLine().AppendLine("Options:");
                 foreach (var p in opt)
                 {
-                    var label = "--" + p.Name + (p.Flag ? "" : " <value>");
+                    var label = (p.Short is { } c ? $"-{c}, " : "") + "--" + p.Name + (p.Flag ? "" : " <value>");
                     sb.AppendLine($"  {label.PadRight(22)} {p.Help}{(p.Required ? " (required)" : "")}{(p.Multi ? " (repeatable)" : "")}");
                 }
             }
@@ -162,7 +169,7 @@ public static class CliParser
         return sb.ToString();
     }
 
-    private static readonly string[] GroupOrder = ["app", "terminal", "settings", "watch", "event", "dashboard", "logs", "wiki", "repo", "page"];
+    private static readonly string[] GroupOrder = ["app", "terminal", "browser", "settings", "watch", "event", "dashboard", "logs", "wiki", "repo", "page"];
 
     /// <summary>Human-friendly rendering of a command result for the terminal.</summary>
     public static string Format(JsonNode? result)

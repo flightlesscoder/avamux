@@ -73,7 +73,7 @@ public sealed partial class TerminalManager : IDisposable
         var env = new Dictionary<string, string>();
         foreach (System.Collections.DictionaryEntry e in Environment.GetEnvironmentVariables())
             if (e.Key is string k && e.Value is string v) env[k] = v;
-        foreach (var k in env.Keys.Where(k => k.StartsWith("AVAMUX_RELAUNCH") || k.StartsWith("WEBKIT_") || k is "TMUX" or "TMUX_PANE" or "COLUMNS" or "LINES" or "GDK_BACKEND").ToList())
+        foreach (var k in env.Keys.Where(k => k.StartsWith("AVAMUX_RELAUNCH") || k.StartsWith("WEBKIT_") || k is "TMUX" or "TMUX_PANE" or "COLUMNS" or "LINES" or "GDK_BACKEND" or "AVAMUX_TERMINAL_ID").ToList())
             env.Remove(k);
         env["TERM"] = settings.Term;
         env["COLORTERM"] = "truecolor";
@@ -85,6 +85,9 @@ public sealed partial class TerminalManager : IDisposable
         lock (_gate)
         {
             var id = (_nextId++).ToString();
+            // Lets programs in the tab (an AI agent) say which tab they are: `avamux browser` opens its pane beside this one.
+            env["AVAMUX_TERMINAL_ID"] = id;
+            if (_config.Settings.Browser.SetBrowserVariable && BrowserOpener() is { } opener) env["BROWSER"] = opener;
             var pty = Pty.Spawn(command, args, cwd, env, options.Cols, options.Rows);
             // Raw replay budget: generous relative to the configured scrollback so a reconnecting view can rebuild it.
             var budget = Math.Clamp((long)settings.Scrollback * 400, 1024 * 1024, 32L * 1024 * 1024);
@@ -96,6 +99,33 @@ public sealed partial class TerminalManager : IDisposable
         Created?.Invoke(session);
         Changed?.Invoke();
         return session;
+    }
+
+    /// <summary>
+    /// A small script for $BROWSER: programs that open a web page call it with the address, and it opens in the
+    /// browser pane beside their tab. Null when the avamux executable cannot be found.
+    /// </summary>
+    private string? BrowserOpener()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exe)) return null;
+            var command = Path.GetFileNameWithoutExtension(exe) == "dotnet" && System.Reflection.Assembly.GetEntryAssembly()?.Location is { Length: > 0 } dll
+                ? $"\"{exe}\" \"{dll}\"" : $"\"{exe}\"";
+            var dir = Path.Combine(_paths.DataDir, "browser");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, "avamux-open-url");
+            var text = "#!/bin/sh\n# Written by avamux: opens web pages in the browser pane beside the calling terminal tab.\n" +
+                       $"for url in \"$@\"; do {command} browser open \"$url\" --no-wait >/dev/null || exit $?; done\n";
+            if (!File.Exists(file) || File.ReadAllText(file) != text)
+            {
+                File.WriteAllText(file, text);
+                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            return file;
+        }
+        catch (Exception ex) { Log.Warn("terminal", "Could not write the $BROWSER helper: " + ex.Message); return null; }
     }
 
     public void Rename(string idOrName, string? name)

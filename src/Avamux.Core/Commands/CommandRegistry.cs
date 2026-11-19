@@ -7,7 +7,8 @@ namespace Avamux.Core.Commands;
 /// <param name="Rest">Positional that swallows all remaining arguments (joined with spaces).</param>
 /// <param name="Flag">Boolean switch that takes no value.</param>
 /// <param name="Multi">May be repeated; collected into an array.</param>
-public sealed record CommandParam(string Name, string Help, bool Required = false, bool Positional = false, bool Rest = false, bool Flag = false, bool Multi = false);
+/// <param name="Short">One-letter form (-i), for options scripts commonly abbreviate.</param>
+public sealed record CommandParam(string Name, string Help, bool Required = false, bool Positional = false, bool Rest = false, bool Flag = false, bool Multi = false, char? Short = null);
 
 public sealed record CommandDef(string Name, string Help, CommandParam[] Params, Func<Args, Task<JsonNode?>> Handler)
 {
@@ -177,7 +178,7 @@ public sealed partial class CommandRegistry
     private static CommandParam P(string name, string help, bool required = false) => new(name, help, required, Positional: true);
     private static CommandParam Rest(string name, string help, bool required = false) => new(name, help, required, Positional: true, Rest: true);
     private static CommandParam O(string name, string help, bool required = false) => new(name, help, required);
-    private static CommandParam F(string name, string help) => new(name, help, Flag: true);
+    private static CommandParam F(string name, string help, char? shortName = null) => new(name, help, Flag: true, Short: shortName);
     private static CommandParam M(string name, string help) => new(name, help, Multi: true);
     private static JsonNode? J<T>(T value) => JsonUtil.ToNode(value);
 
@@ -187,6 +188,7 @@ public sealed partial class CommandRegistry
         var r = new CommandRegistry();
         r.AddAppCommands(s!);
         r.AddTerminalCommands(s!);
+        r.AddBrowserCommands(s!);
         r.AddSettingsCommands(s!);
         r.AddWatchCommands(s!);
         r.AddEventCommands(s!);

@@ -144,6 +144,8 @@ public sealed class WikiPage : UserControl, IPage
             if (!node.IsFolder && node.Path != _path) Open(node.Path);
         };
 
+        WebViews.FocusOnClick(_preview);
+
         _preview.EnvironmentRequested += (_, e) => WebViews.Configure(e);
         _preview.WebMessageReceived += OnPreviewMessage;
         _preview.NavigationCompleted += (_, e) => { if (e.IsSuccess) _ = PreviewStartedAsync(); };

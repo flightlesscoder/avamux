@@ -33,8 +33,12 @@ internal static class Cli
         var cmd = parsed.Command;
         var a = parsed.Args;
         // Paths are relative to where the CLI was run, not to the app's working folder.
-        foreach (var key in new[] { "cwd", "file" })
+        foreach (var key in new[] { "cwd", "file", "out", "dir" })
             if (a[key] is JsonValue v && v.TryGetValue<string>(out var p)) a[key] = Path.GetFullPath(p);
+        if (cmd.Name is "browser upload" && a["files"] is JsonArray files)
+            a["files"] = new JsonArray(files.Select(f => (JsonNode)Path.GetFullPath(f!.GetValue<string>())).ToArray());
+        // The terminal tab this runs in, so browser commands act on the pane beside it.
+        if (cmd.Group == "browser" && Environment.GetEnvironmentVariable("AVAMUX_TERMINAL_ID") is { Length: > 0 } tab) a["callerTerminal"] = tab;
         if (cmd.Name is "repo add" && a["path"] is JsonValue rp && rp.TryGetValue<string>(out var repoPath) && !repoPath.StartsWith('~'))
             a["path"] = Path.GetFullPath(repoPath);
         if (cmd.Name is "terminal new" && !a.ContainsKey("cwd")) a["cwd"] = Environment.CurrentDirectory;

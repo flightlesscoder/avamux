@@ -9,6 +9,8 @@
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <ProjectReference Include="..\Avamux.Plugin.Abstractions\Avamux.Plugin.Abstractions.csproj" />
     <EmbeddedResource Include="Web\**\*" />
+    <EmbeddedResource Include="Browser\agent.js" />
+    <EmbeddedResource Include="Browser\SKILL.md" />
     <InternalsVisibleTo Include="Avamux.Tests" />
   </ItemGroup>
 </Project>

@@ -20,7 +20,7 @@ Linux needs WebKitGTK 4.1 (`libwebkit2gtk-4.1`). macOS uses the system WKWebView
 
 | Page | What it does |
 |---|---|
-| Terminals | Tabbed terminals (xterm.js on a real pty). Tabs show what is running, or a name you give them (double-click), and a marker for what the terminal is doing: idle, running, an AI agent working, an AI agent waiting for input, or ended. Tabs can be moved to their own window and back (right-click, or the button at the end of the tab strip). Ctrl+Shift+C / V copy and paste, Ctrl+Shift+T / W new and close tab, Ctrl+PageUp / PageDown switch tabs. Every other key combination goes to the program. |
+| Terminals | Tabbed terminals (xterm.js on a real pty). Tabs show what is running, or a name you give them (double-click), and a marker for what the terminal is doing: idle, running, an AI agent working, an AI agent waiting for input, or ended. Tabs can be moved to their own window and back (right-click, or the button at the end of the tab strip). Ctrl+Shift+C / V copy and paste, Ctrl+Shift+T / W new and close tab, Ctrl+PageUp / PageDown switch tabs, Ctrl+Shift+L opens or hides the tab's browser. Every other key combination goes to the program. A browser can sit beside each tab, for you and for the AI agent in it: see [Browser panes](#browser-panes). |
 | Search | One box over wiki pages, events, watches, terminals, repositories, logs and settings. Pick which sources to include; click a result to open it where it lives. |
 | Today | Opens today's daily note in the wiki, creating it if needed. The name comes from `wiki.dailyNoteFormat` (default `yyyy-MM-dd dddd`, e.g. `2026-11-12 Thursday.md`) and `wiki.dailyNoteFolder` (default `Daily`). |
 | Settings | Every setting, which file it comes from, and which file to save changes to. Includes themes, the navigation bar style and the AI Workloads switches. |
@@ -252,6 +252,65 @@ Code runs on the UI thread, so it can touch controls, and so a loop that never a
 ends: await, or use `Task.Run`, for anything long. It runs with everything avamux can do; it is your own machine
 and your own code, like a plugin.
 
+## Browser panes
+
+Each terminal tab can have a browser beside it: the globe button at the end of the tab strip (or Ctrl+Shift+L, in
+the terminal or in the page) opens one, and hides or shows it again. It is a real web view (WebKitGTK on Linux, WKWebView on macOS) with tabs of its
+own, an address bar (text that is not an address is searched for, `browser.searchUrl`), back, forward, reload, zoom
+(Ctrl+plus/minus/0), the page's own alert/confirm/prompt dialogs shown above it, and the Web Inspector (F12, or the bug
+button, which gets a red dot when the page has thrown errors). The inspector docks inside the pane when the pane is at
+least 750 px wide, and opens in a window of its own otherwise. A pane can move into a window of its own and back
+(the ⋮ menu or `avamux browser move window|dock`); closing that window puts it back beside its tab. Closing a tab
+closes the panes docked beside it. Links that a page opens in a new window become new tabs in the same dock.
+
+**Keep alive.** The pin button keeps a pane's page running while you look at another tab or page (Watching, say):
+it stays loaded at its size, keeps its timers and animations going, and always reports itself visible and focused
+(`document.visibilityState`, `blur` and `visibilitychange` included), so a running app or game is where you left it.
+`browser.keepAliveByDefault` turns it on for new panes. (On Linux, WebKitGTK keeps panes running when they are out of
+view anyway; there keep alive also pins what the page is told. WKWebView on macOS slows hidden pages down; keep alive is
+meant to prevent that there, but has not been tried on a Mac yet.)
+
+**Design mode.** The hand button (Ctrl+Shift+C in the page) lets you click an element: its selector, ref, text, box,
+styles and HTML go to the clipboard, ready to paste to an agent.
+
+**For agents.** Every terminal gets `AVAMUX_TERMINAL_ID`, and `avamux browser …` run in a tab acts on the pane beside
+that tab, so an agent drives its own browser while you watch (and can open the inspector on the same page). The
+commands follow [agent-browser](https://github.com/vercel-labs/agent-browser) and cmux:
+
+```sh
+avamux browser open localhost:3000            # beside this tab; waits for the load; prints the pane id (b1)
+avamux browser snapshot -i                    # what can be clicked or typed into, with refs: - button "Save" [ref=e7]
+avamux browser fill e3 "ada@example.com"
+avamux browser click e7 --snapshot-after      # act, then see the page again
+avamux browser wait --text "Saved"            # or --selector, --url-contains, --load-state networkidle, --function
+avamux browser find role button --name "Delete" click
+avamux browser errors && avamux browser network --failed
+avamux browser dialog accept                  # the confirm() the click opened
+avamux browser eval 'document.title'
+avamux browser screenshot --full --out page.png
+avamux browser state save login.json          # cookies and storage, to load into another pane
+```
+
+Also `goto`, `back`, `forward`, `reload [--hard]`, `get text|html|value|attr|count|box|styles`, `is
+visible|enabled|checked`, `hover`, `focus`, `type`, `press "Control+a Backspace"`, `keydown`/`keyup`, `select`,
+`check`/`uncheck`, `scroll`, `drag`, `upload`, `highlight`, `console`, `cookies`, `storage`, `tab list|new|switch|close`,
+`frame`, `pdf`, `zoom`, `viewport 390 844`, `devtools`, `keep-alive`, `design-mode`, `show`, `close` and `list`; each
+takes `--surface b2` to name another pane. `avamux browser /?` lists them all. Errors start with a code an agent can
+act on: `not_found` (a stale ref: snapshot again), `invalid_state`, `timeout`, `js_error`, `not_supported`.
+
+`avamux browser skill --install` puts an `avamux-browser` skill for Claude Code (and Codex, when installed) in
+`~/.claude/skills`, so agents know all this without being told. With `browser.setBrowserVariable`, new terminals
+also get `BROWSER` pointing at avamux, so a program that opens a web page (a CLI login, a dev server's `--open`)
+opens it in the tab's pane. A Ctrl+click on a link in a terminal opens it there too (`browser.terminalLinksInPane`
+swaps plain click and Ctrl+click; `browser.externalSites` lists sites that always go to the system browser).
+`browser.agentControl` switches command-line control off.
+
+What the system web view cannot do (as in cmux): intercept or mock network requests, emulate offline or a
+location, record traces, or report response bodies and HttpOnly cookies. Screenshots, an exact viewport, docking the
+inspector, the page's dialogs as a bar above it, and recording the console from the very start of a page need
+WebKitGTK (Linux); on macOS (not yet tried there) the console is recorded from the first command on a page. Panes are
+not restored when avamux restarts, as terminals are not.
+
 ## Caffeine
 
 The Caffeine page keeps the computer from sleeping (and, with `caffeine.keepDisplayOn`, the screen from blanking):
@@ -322,6 +381,7 @@ avamux wiki today
 avamux theme set classic90s
 avamux theme show synthwave-kat --file mine.yaml && avamux theme import mine.yaml --use
 avamux caffeine on --for 1h30m
+avamux browser open localhost:3000 && avamux browser snapshot -i   # see Browser panes
 ```
 
 Add `--json` to any command for machine-readable output. The same commands are available to dashboard

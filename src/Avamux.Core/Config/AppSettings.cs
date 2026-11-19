@@ -14,6 +14,7 @@ public sealed class AppSettings
     public ThemeSettings Theme { get; set; } = new();
     public CaffeineSettings Caffeine { get; set; } = new();
     public AiSettings Ai { get; set; } = new();
+    public BrowserSettings Browser { get; set; } = new();
 }
 
 public sealed class TerminalSettings
@@ -180,4 +181,24 @@ public sealed class AiSettings
     public bool Chat { get; set; }
     /// <summary>Show the Workloads page in the navigation.</summary>
     public bool Workloads { get; set; }
+}
+
+public sealed class BrowserSettings
+{
+    /// <summary>Let `avamux browser` commands (and the agents in terminal tabs) drive browser panes.</summary>
+    public bool AgentControl { get; set; } = true;
+    /// <summary>Address a new browser pane opens when none is given.</summary>
+    public string HomePage { get; set; } = "about:blank";
+    /// <summary>Where text typed in the address bar is searched for; {query} is replaced by it.</summary>
+    public string SearchUrl { get; set; } = "https://duckduckgo.com/?q={query}";
+    /// <summary>New panes keep running (and believe they are visible) while another tab or page is in front.</summary>
+    public bool KeepAliveByDefault { get; set; }
+    /// <summary>A plain click on a link in a terminal opens it in the tab's browser pane; Ctrl+click does the opposite.</summary>
+    public bool TerminalLinksInPane { get; set; }
+    /// <summary>Sites whose links always open in the system browser: host names or *.example.com, separated by commas.</summary>
+    public string ExternalSites { get; set; } = "";
+    /// <summary>The Web Inspector in browser panes. Applies to panes opened afterwards.</summary>
+    public bool DeveloperTools { get; set; } = true;
+    /// <summary>Set BROWSER in new terminals, so programs that open a web page open it in the tab's browser pane.</summary>
+    public bool SetBrowserVariable { get; set; }
 }

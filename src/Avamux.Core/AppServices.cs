@@ -1,4 +1,5 @@
 using Avamux.Core.Awake;
+using Avamux.Core.Browser;
 using Avamux.Core.Commands;
 using Avamux.Core.Config;
 using Avamux.Core.Dashboard;
@@ -45,6 +46,7 @@ public sealed class AppServices : IAsyncDisposable
         Activity = new GitActivityService(Paths);
         ActivitySources.RepositoriesPage = () => Repos.Items.Select(r => (r.Name, r.Path));
         Disks = new DiskScanService(Paths);
+        Browser = new BrowserService(Paths, Config);
         Web = new WebServer(this);
         Dashboard = new DashboardService(this);
         Search = new SearchService(this);
@@ -87,6 +89,8 @@ public sealed class AppServices : IAsyncDisposable
     public GitActivityService Activity { get; }
     /// <summary>Disk space scans (System → a volume's map), kept running and saved whatever the windows do.</summary>
     public DiskScanService Disks { get; }
+    /// <summary>The `avamux browser` commands; the panes themselves are the UI's.</summary>
+    public BrowserService Browser { get; }
     public WebServer Web { get; }
     public DashboardService Dashboard { get; }
     public CommandRegistry Commands { get; }
