@@ -115,6 +115,26 @@ public sealed class WikiPage : UserControl, IPage
             e.Handled = true;
             _ = PasteAsync();
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        // Right-click: the usual editing commands, enabled for what the selection and the page allow.
+        var editMenu = new ContextMenu();
+        MenuItem cut = Ui.Item("Cut", () => _editor.Cut()), copy = Ui.Item("Copy", () => _editor.Copy()),
+            paste = Ui.Item("Paste", () => _ = PasteAsync()), delete = Ui.Item("Delete", () => _editor.Delete()),
+            undo = Ui.Item("Undo", () => _editor.Undo()), redo = Ui.Item("Redo", () => _editor.Redo()),
+            selectAll = Ui.Item("Select All", () => _editor.SelectAll());
+        foreach (var (item, keys) in new[] { (cut, "Ctrl+X"), (copy, "Ctrl+C"), (paste, "Ctrl+V"), (undo, "Ctrl+Z"), (redo, "Ctrl+Y"), (selectAll, "Ctrl+A") })
+            item.InputGesture = KeyGesture.Parse(keys);
+        foreach (var o in new object[] { undo, redo, new Separator(), cut, copy, paste, delete, new Separator(), selectAll }) editMenu.Items.Add(o);
+        editMenu.Opening += (_, _) =>
+        {
+            var selected = _editor.SelectionLength > 0;
+            var writable = !_editor.IsReadOnly;
+            cut.IsEnabled = delete.IsEnabled = selected && writable;
+            copy.IsEnabled = selected;
+            paste.IsEnabled = writable;
+            undo.IsEnabled = writable && _editor.CanUndo;
+            redo.IsEnabled = writable && _editor.CanRedo;
+        };
+        _editor.TextArea.ContextMenu = editMenu;
         _editor.TextArea.TextView.ScrollOffsetChanged += (_, _) =>
         {
             if (!_loading && _path is not null && _editable) State.RememberWiki(_path, editor: _editor.VerticalOffset, caret: _editor.CaretOffset);
