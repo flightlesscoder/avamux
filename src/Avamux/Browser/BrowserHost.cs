@@ -399,6 +399,7 @@ public sealed class BrowserHost : IBrowserSurfaces
     Task IBrowserSurfaces.ScreenshotAsync(string id, string file, bool fullPage) => OnUi(async () => { await Get(id).ScreenshotAsync(file, fullPage); return true; });
     Task IBrowserSurfaces.PdfAsync(string id, string file) => OnUi(async () => { await Get(id).PdfAsync(file); return true; });
     Task<string> IBrowserSurfaces.DevToolsAsync(string id, string action) => OnUi(() => Get(id).DevToolsAsync(action));
+    Task IBrowserSurfaces.SetInitScriptsAsync(string id, IReadOnlyList<BrowserInitScript> scripts) => OnUi(async () => { await Get(id).SetInitScriptsAsync(scripts); return true; });
     Task IBrowserSurfaces.SetKeepAliveAsync(string id, bool on) => OnUi(async () => { await Get(id).SetKeepAliveAsync(on); return true; });
     Task<double> IBrowserSurfaces.ZoomAsync(string id, string action) => OnUi(() => Get(id).ZoomAsync(action));
     Task<string?> IBrowserSurfaces.SetViewportAsync(string id, int? width, int? height) => OnUi(() => Get(id).SetViewport(width, height));
