@@ -23,7 +23,7 @@ Linux needs WebKitGTK 4.1 (`libwebkit2gtk-4.1`). macOS uses the system WKWebView
 | Terminals | Tabbed terminals (xterm.js on a real pty). Tabs show what is running, or a name you give them (double-click), and a marker for what the terminal is doing: idle, running, an AI agent working, an AI agent waiting for input, or ended. Tabs can be moved to their own window and back (right-click, or the button at the end of the tab strip). Ctrl+Shift+C / V copy and paste, Ctrl+Shift+T / W new and close tab, Ctrl+PageUp / PageDown switch tabs, Ctrl+Shift+L opens or hides the tab's browser. Every other key combination goes to the program. A browser can sit beside each tab, for you and for the AI agent in it: see [Browser panes](#browser-panes). |
 | Search | One box over wiki pages, events, watches, terminals, repositories, logs and settings. Pick which sources to include; click a result to open it where it lives. |
 | Today | Opens today's daily note in the wiki, creating it if needed. The name comes from `wiki.dailyNoteFormat` (default `yyyy-MM-dd dddd`, e.g. `2026-11-12 Thursday.md`) and `wiki.dailyNoteFolder` (default `Daily`). |
-| Settings | Every setting, which file it comes from, and which file to save changes to. Includes themes, the navigation bar style and the AI Workloads switches. |
+| Settings | Every setting, which file it comes from, and which file to save changes to. Includes themes, the navigation bar style and the AI Workloads switches, and a Hotkeys list of every key avamux handles, page by page. |
 | Watching | Periodic checks with a status, summary, clickable/editable link and item list. |
 | Events | Timers, scheduled tasks and calendar events (multi-day, weekdays, weekly, monthly, yearly, fixed interval) that can run a script on start and on end. Events can have a location, file attachments, a colour and a markdown description. Month, Week and Day views; in Week and Day, events sit at their hours and overlapping ones share the column. A "Running now" section above the day's list shows events in progress and event scripts still running (with a Stop button). Skip a single occurrence of a repeating event (a holiday, a cancelled session) by right-clicking it on the calendar; skipped dates are listed in the editor, where they can be brought back. Double-click an event on the calendar to edit it, or an empty spot to add one. |
 | Dashboard | Your own HTML/CSS/JS from the dashboard folder, with developer tools, an Edit button that opens the folder in your editor, togglable extra CSS/JS sources, and `window.avamux` to control the app. |
@@ -297,6 +297,12 @@ visible|enabled|checked`, `hover`, `focus`, `type`, `press "Control+a Backspace"
 `frame`, `pdf`, `zoom`, `viewport 390 844`, `devtools`, `keep-alive`, `design-mode`, `show`, `close` and `list`; each
 takes `--surface b2` to name another pane. `avamux browser /?` lists them all. Errors start with a code an agent can
 act on: `not_found` (a stale ref: snapshot again), `invalid_state`, `timeout`, `js_error`, `not_supported`.
+
+`frame` only reaches iframes of the same site. For a cross-origin iframe, `addinitscript` (as in cmux) adds a script
+that runs at the start of every page from the next load on, before the page's own scripts, in every frame, cross-origin
+ones included (`--main-frame` for the main page only; on WebKitGTK). The script can `postMessage` what it finds to the
+main page, and `avamux browser messages` lists what the main page received (origin, which frame, data).
+`initscripts` lists them, `initscripts remove i1` and `initscripts clear` take them away.
 
 `avamux browser skill --install` puts an `avamux-browser` skill for Claude Code (and Codex, when installed) in
 `~/.claude/skills`, so agents know all this without being told. With `browser.setBrowserVariable`, new terminals

@@ -57,8 +57,8 @@ Waiting: `wait --selector <css> [--state visible|hidden|attached|detached]`, `wa
 `wait --url-contains /dashboard`, `wait --url "**/done"`, `wait --load-state load|networkidle`,
 `wait --function "window.appReady === true"`, `wait 500` (ms). `--timeout-ms` (default 30000).
 
-Debugging: `console [--level error] [--limit 20]`, `errors`, `network [--filter api] [--failed]`
-(each with `clear`), `highlight <target>`, `screenshot [--full] [--out file.png]`, `pdf [--out file]`.
+Debugging: `console [--level error] [--limit 20]`, `errors`, `network [--filter api] [--failed]`,
+`messages [--origin x]` (each with `clear`), `highlight <target>`, `screenshot [--full] [--out file.png]`, `pdf [--out file]`.
 `devtools open` shows the Web Inspector to the user.
 
 State: `cookies [get|set|clear]`, `storage local|session [get|set|remove|clear] [key] [value]`,
@@ -69,6 +69,31 @@ Dialogs: an `alert`/`confirm`/`prompt` blocks the page; other commands then fail
 
 Tabs and frames: `tab list|new [url]|switch <index|id>|close`, `frame <iframe selector>` / `frame main`.
 Same-site iframes are also included in snapshots directly.
+
+## Cross-origin iframes and scripts before the page
+
+`frame` and the other commands cannot reach into an iframe from another site. An init script can: it runs at
+the start of every page the pane loads, before the page's own scripts, in every frame, cross-origin ones included.
+Have it send what it finds to the main page with `postMessage`, then read it with `messages`:
+
+```bash
+avamux browser addinitscript --file probe.js     # or: addinitscript 'window.__ready = false'
+avamux browser reload                            # init scripts start with the next load
+avamux browser messages --origin payments.example
+```
+
+```js
+// probe.js: runs in the main page and in every frame
+if (window !== window.top && location.hostname.endsWith('payments.example')) {
+  addEventListener('load', () => parent.postMessage({ probe: 'card-form', fields: document.querySelectorAll('input').length }, '*'));
+}
+```
+
+`messages` lists every postMessage the main page received (`origin`, `from` frame/self, the frame's
+`#id` or address, `data`), kept across loads; `messages clear` empties it. A frame's `console.log` also
+shows up in `console`. `--main-frame` limits a script to the main page. `initscripts` lists them,
+`initscripts remove i1` / `initscripts clear` take them away (pages already loaded keep what they ran).
+Init scripts need WebKitGTK (Linux); elsewhere `addinitscript` answers `not_supported`.
 
 Viewport: `viewport 390 844` (CSS pixels, fitted into the pane), `viewport reset`, `zoom in|out|reset|1.5`.
 

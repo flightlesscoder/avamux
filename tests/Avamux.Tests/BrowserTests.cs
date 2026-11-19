@@ -46,6 +46,8 @@ internal sealed class FakeSurfaces : IBrowserSurfaces
     public Task<string?> SetViewportAsync(string id, int? width, int? height) => Task.FromResult<string?>($"{width}x{height}");
     public Task<bool> DesignModeAsync(string id, bool? on) => Task.FromResult(on ?? false);
     public Task<bool> AnswerDialogAsync(string id, bool accept, string? text) => Task.FromResult(true);
+    public Dictionary<string, IReadOnlyList<BrowserInitScript>> InitScripts { get; } = [];
+    public Task SetInitScriptsAsync(string id, IReadOnlyList<BrowserInitScript> scripts) { InitScripts[id] = scripts; return Task.CompletedTask; }
 }
 
 public class BrowserTests
@@ -212,6 +214,56 @@ public class BrowserTests
             Assert.Equal("http://localhost:3000/api", Assert.Single(failed)!["url"]!.GetValue<string>());
             Assert.Equal("cleared 2", (await service.LogAsync(A(("action", "clear")), "console"))!.GetValue<string>());
             Assert.Empty((JsonArray)(await service.LogAsync(A(), "console"))!);
+        }
+    }
+
+    [Fact]
+    public async Task Init_scripts_go_to_the_pane_in_order_and_can_be_listed_removed_and_cleared()
+    {
+        var (box, config, service, panes) = Make();
+        using (box) using (config)
+        {
+            panes.Items.Add(FakeSurfaces.Pane("b1"));
+            var file = Path.Combine(box.Root, "probe.js");
+            File.WriteAllText(file, "parent.postMessage('hi', '*');\nconsole.log(1);");
+            Assert.StartsWith("i1 added", (await service.AddInitScriptAsync(A(("script", "window.__early = 1"))))!.GetValue<string>());
+            Assert.StartsWith("i2 added", (await service.AddInitScriptAsync(A(("file", file), ("main-frame", true))))!.GetValue<string>());
+            Assert.Equal(["i1", "i2"], panes.InitScripts["b1"].Select(x => x.Id));
+            Assert.Equal([false, true], panes.InitScripts["b1"].Select(x => x.MainFrameOnly));
+            Assert.Equal(File.ReadAllText(file), panes.InitScripts["b1"][1].Source);
+
+            var listed = (JsonArray)(await service.InitScriptsAsync(A()))!;
+            Assert.Equal(["all", "main"], listed.Select(x => x!["frames"]!.GetValue<string>()));
+            Assert.Equal(2, listed[1]!["lines"]!.GetValue<int>());
+
+            await service.InitScriptsAsync(A(("action", "remove"), ("id", "i1")));
+            Assert.Equal(["i2"], panes.InitScripts["b1"].Select(x => x.Id));
+            Assert.StartsWith("i3", (await service.AddInitScriptAsync(A(("script", "1"))))!.GetValue<string>()); // ids are not reused
+            Assert.Equal("not_found", (await Assert.ThrowsAsync<BrowserException>(() => service.InitScriptsAsync(A(("action", "remove"), ("id", "i1"))))).Code);
+            Assert.Equal("invalid_params", (await Assert.ThrowsAsync<BrowserException>(() => service.AddInitScriptAsync(A(("script", " "))))).Code);
+
+            await service.InitScriptsAsync(A(("action", "clear")));
+            Assert.Empty(panes.InitScripts["b1"]);
+            Assert.Empty((JsonArray)(await service.InitScriptsAsync(A()))!);
+        }
+    }
+
+    [Fact]
+    public async Task Messages_posted_to_the_page_are_kept_and_filtered_by_origin()
+    {
+        var (box, config, service, panes) = Make();
+        using (box) using (config)
+        {
+            panes.Items.Add(FakeSurfaces.Pane("b1"));
+            service.Record("b1", JsonNode.Parse("""
+                {"k":"log","url":"http://localhost:3000/","items":[
+                  ["messages",{"origin":"https://pay.example","from":"frame","frame":"#card","data":"{\"fields\":3}","ts":1700000000000}],
+                  ["messages",{"origin":"http://localhost:3000","from":"self","data":"tick","ts":1700000000100}]]}
+                """)!.AsObject());
+            Assert.Equal(2, ((JsonArray)(await service.LogAsync(A(), "messages"))!).Count);
+            var pay = Assert.Single((JsonArray)(await service.LogAsync(A(("origin", "pay.example")), "messages"))!);
+            Assert.Equal("#card", pay!["frame"]!.GetValue<string>());
+            Assert.Equal("cleared 2", (await service.LogAsync(A(("action", "clear")), "messages"))!.GetValue<string>());
         }
     }
 
