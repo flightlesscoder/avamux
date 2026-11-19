@@ -20,25 +20,77 @@ public sealed class EventsPage : UserControl, IPage
     private static readonly DayOfWeek[] Week =
         [DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday, DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday];
 
+    private enum CalendarView { Month, Week, Day }
+
+    /// <summary>Height of one hour in the week and day views.</summary>
+    private const double HourHeight = 44;
+    private const double GutterWidth = 50;
+
     private readonly Grid _calendar = new() { ColumnDefinitions = new ColumnDefinitions("*,*,*,*,*,*,*"), RowDefinitions = new RowDefinitions("Auto,*,*,*,*,*,*") };
+    private readonly Border _calendarHost = new() { Margin = new Thickness(12, 0, 12, 12) };
+    private readonly ScrollViewer _timeScroll = new() { HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+    /// <summary>The week and day views: day headers, the all-day strip and the hours. Kept, so the scroll position survives a rebuild.</summary>
+    private readonly Border _timeHeader = new(), _timeStrip = new();
+    private readonly DockPanel _timeLayout;
     private readonly TextBlock _monthLabel = new() { FontSize = 16, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, MinWidth = 150 };
+    private readonly Button _prev, _next;
+    private readonly Button[] _viewTabs;
     private readonly StackPanel _side = new() { Spacing = 14, Margin = new Thickness(16, 14, 16, 24) };
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly List<(TextBlock Text, EventItem Item)> _countdowns = [];
+    /// <summary>Texts of the "Running now" segment that change every second.</summary>
+    private readonly List<Action> _live = [];
     private DateTime _month = new(DateTime.Today.Year, DateTime.Today.Month, 1);
     private DateTime _selectedDay = DateTime.Today;
     private DateTime _today = DateTime.Today;
+    private CalendarView _view;
+    /// <summary>Set when the week or day view should scroll to a sensible hour on its next build.</summary>
+    private bool _scrollPending = true;
+    /// <summary>Where the week or day view scrolls to once it has been laid out.</summary>
+    private double? _scrollTo;
+    /// <summary>The red "now" line of the week and day views, and where it is drawn.</summary>
+    private (Border Line, DateTime Day)? _nowLine;
+    /// <summary>What was in progress at the last build, to notice when something starts or ends.</summary>
+    private string _inProgressKey = "";
 
     private static EventService Events => App.Services.Events;
 
     public EventsPage()
     {
-        var nav = Ui.Row(4,
-            Ui.TextButton("‹", () => { _month = _month.AddMonths(-1); Rebuild(); }, "Previous month"),
-            Ui.TextButton("Today", () => { _month = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1); _selectedDay = DateTime.Today; Rebuild(); }),
-            Ui.TextButton("›", () => { _month = _month.AddMonths(1); Rebuild(); }, "Next month"),
-            Ui.Apply(_monthLabel, t => t.Margin = new Thickness(10, 0, 0, 0)));
-        nav.Margin = new Thickness(16, 10, 16, 8);
+        _view = Enum.TryParse<CalendarView>(App.Services.Ui.Data.EventsView, true, out var v) ? v : CalendarView.Month;
+        _timeLayout = new DockPanel
+        {
+            Children = { _timeHeader.Dock(Dock.Top), _timeStrip.Dock(Dock.Top), new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 0, 0), Child = _timeScroll } },
+        };
+        _prev = Ui.TextButton("‹", () => Step(-1));
+        _next = Ui.TextButton("›", () => Step(1));
+        _viewTabs = Enum.GetValues<CalendarView>().Select(view =>
+        {
+            var b = new Button { Content = view.ToString(), Classes = { "tab" }, Padding = new Thickness(10, 4) };
+            // From the month view, land on the selected day if it is in the month shown, else on the month's first day.
+            b.Click += (_, _) => SetView(view, _view != CalendarView.Month || (_selectedDay.Year == _month.Year && _selectedDay.Month == _month.Month)
+                ? _selectedDay : _month.Year == DateTime.Today.Year && _month.Month == DateTime.Today.Month ? DateTime.Today : _month);
+            return b;
+        }).ToArray();
+        var nav = new DockPanel
+        {
+            Margin = new Thickness(16, 10, 16, 8),
+            Children =
+            {
+                Ui.Row(0, _viewTabs).Dock(Dock.Right),
+                Ui.Row(4,
+                    _prev,
+                    Ui.TextButton("Today", () =>
+                    {
+                        _selectedDay = DateTime.Today;
+                        _month = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+                        _scrollPending = true;
+                        Rebuild();
+                    }),
+                    _next,
+                    Ui.Apply(_monthLabel, t => t.Margin = new Thickness(10, 0, 0, 0))),
+            },
+        };
 
         Content = new DockPanel
         {
@@ -56,19 +108,31 @@ public sealed class EventsPage : UserControl, IPage
                         new Border
                         {
                             BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 1, 0),
-                            Child = new DockPanel { Children = { nav.Dock(Dock.Top), new Border { Margin = new Thickness(12, 0, 12, 12), Child = _calendar } } },
+                            Child = new DockPanel { Children = { nav.Dock(Dock.Top), _calendarHost } },
                         },
                         new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 0, 0), Child = new ScrollViewer { Content = _side } }.At(0, 1),
                     },
                 },
             },
         };
+        // The hours can only be scrolled once they have been measured, which happens after a build.
+        _timeScroll.LayoutUpdated += (_, _) =>
+        {
+            if (_scrollTo is not { } y || _timeScroll.Extent.Height <= 0 || _timeScroll.Viewport.Height <= 0) return;
+            _scrollTo = null;
+            // Set after the layout pass: an offset set while it is running is put back by the scroll presenter.
+            Dispatcher.UIThread.Post(() => _timeScroll.Offset = new Vector(0, Math.Min(y, Math.Max(0, _timeScroll.Extent.Height - _timeScroll.Viewport.Height))), DispatcherPriority.Background);
+        };
         Events.Changed += Ui.Debounced(Rebuild);
         _clock.Tick += (_, _) =>
         {
             if (!IsVisible) return;
             if (DateTime.Today != _today) { _today = DateTime.Today; Rebuild(); return; }
+            // Something started or ended without a trigger saying so (events can be switched off in Settings).
+            if (InProgressKey(DateTime.Now) != _inProgressKey) { Rebuild(); return; }
             foreach (var (text, item) in _countdowns) text.Text = NextText(item);
+            foreach (var update in _live) update();
+            if (_nowLine is { } now) now.Line.Margin = new Thickness(0, Math.Max(0, (DateTime.Now - now.Day).TotalHours * HourHeight - 1), 0, 0);
         };
         _clock.Start();
         Rebuild();
@@ -76,16 +140,45 @@ public sealed class EventsPage : UserControl, IPage
 
     public void OnShown() => Rebuild();
 
-    /// <summary>Shows an event's month and opens it for editing (used by Search).</summary>
+    /// <summary>Shows an event's month (or week or day) and opens it for editing (used by Search).</summary>
     public void Reveal(string id)
     {
         if (Events.Find(id) is not { } e) { Ui.Toast(this, "That event no longer exists"); return; }
         var when = Events.NextOccurrence(e)?.Start ?? e.Start;
         _selectedDay = when.Date;
         _month = new DateTime(when.Year, when.Month, 1);
+        _scrollPending = true;
         Rebuild();
         _ = EditAsync(e, e.Kind, null);
     }
+
+    private void SetView(CalendarView view, DateTime day)
+    {
+        _view = view;
+        _selectedDay = day.Date;
+        _month = new DateTime(day.Year, day.Month, 1);
+        _scrollPending = true;
+        App.Services.Ui.Data.EventsView = view.ToString().ToLowerInvariant();
+        App.Services.Ui.SaveSoon();
+        Rebuild();
+    }
+
+    /// <summary>‹ and ›: a month, a week or a day back or forward.</summary>
+    private void Step(int direction)
+    {
+        if (_view == CalendarView.Month) _month = _month.AddMonths(direction);
+        else
+        {
+            _selectedDay = _selectedDay.AddDays(direction * (_view == CalendarView.Week ? 7 : 1));
+            _month = new DateTime(_selectedDay.Year, _selectedDay.Month, 1);
+        }
+        Rebuild();
+    }
+
+    private static DateTime WeekStart(DateTime day) => day.Date.AddDays(-(((int)day.DayOfWeek + 6) % 7));
+
+    private static string InProgressKey(DateTime now) =>
+        string.Join("|", Events.InProgress(now).Select(x => $"{x.Item.Id}@{x.Occurrence.Start:O}"));
 
     /// <summary>Colour of an item: its own if set, else the colour configured for its kind, else the theme's.</summary>
     private static string? CustomColor(EventItem e)
@@ -113,7 +206,14 @@ public sealed class EventsPage : UserControl, IPage
 
     private void Rebuild()
     {
-        BuildCalendar();
+        _inProgressKey = InProgressKey(DateTime.Now);
+        for (var i = 0; i < _viewTabs.Length; i++) _viewTabs[i].Classes.Set("on", (int)_view == i);
+        var unit = _view switch { CalendarView.Month => "month", CalendarView.Week => "week", _ => "day" };
+        ToolTip.SetTip(_prev, "Previous " + unit);
+        ToolTip.SetTip(_next, "Next " + unit);
+        _nowLine = null;
+        if (_view == CalendarView.Month) BuildCalendar();
+        else BuildTimeGrid(_view == CalendarView.Week ? WeekStart(_selectedDay) : _selectedDay.Date, _view == CalendarView.Week ? 7 : 1);
         BuildSide();
     }
 
@@ -121,9 +221,234 @@ public sealed class EventsPage : UserControl, IPage
     private static IBrush WeekendBrush() =>
         Ui.Raw(Rgb.Parse(Ui.Theme["cell"]).Mix(Rgb.Parse(Ui.Theme["bgDeep"]), 0.3).Hex);
 
+    private static string WeekLabel(DateTime first)
+    {
+        var last = first.AddDays(6);
+        return first.Year != last.Year ? $"{first:d MMM yyyy} – {last:d MMM yyyy}"
+            : first.Month != last.Month ? $"{first:d MMM} – {last:d MMM yyyy}"
+            : $"{first.Day} – {last:d MMMM yyyy}";
+    }
+
+    /// <summary>Opens an event for editing on a double-click, as on the month calendar.</summary>
+    private void EditOnDoubleClick(Control target, EventItem item, DateTime day)
+    {
+        target.PointerPressed += (_, e) =>
+        {
+            if (e.ClickCount < 2 || !e.GetCurrentPoint(target).Properties.IsLeftButtonPressed) return;
+            e.Handled = true;
+            _selectedDay = day;
+            _ = EditAsync(item, item.Kind, null);
+        };
+    }
+
+    private static string Tip(EventItem item, Occurrence occ)
+    {
+        var when = item.AllDay ? "all day"
+            : occ.End is { } end ? (occ.Start.Date == end.Date ? $"{occ.Start:HH:mm}–{end:HH:mm}" : $"{occ.Start:ddd d MMM HH:mm} → {end:ddd d MMM HH:mm}")
+            : occ.Start.ToString("HH:mm");
+        return item.Title + "\n" + when + (string.IsNullOrWhiteSpace(item.Location) ? "" : "\n" + item.Location) + "\nDouble-click to edit";
+    }
+
+    /// <summary>Whether an occurrence goes in the strip above the hours: all-day events and anything a day or longer.</summary>
+    private static bool IsBanner(EventItem item, Occurrence occ) => item.AllDay || occ.End is { } end && end - occ.Start >= TimeSpan.FromDays(1);
+
+    /// <summary>
+    /// The week and day views: one column per day, hours running down, events drawn as blocks at their times.
+    /// Events that overlap share the column side by side. All-day and multi-day events sit in a strip above.
+    /// </summary>
+    private void BuildTimeGrid(DateTime first, int days)
+    {
+        _monthLabel.Text = days == 1 ? first.ToString("dddd, d MMMM yyyy") : WeekLabel(first);
+        var last = first.AddDays(days);
+        var agenda = Events.Agenda(first, last.AddTicks(-1));
+        var now = DateTime.Now;
+        var columns = $"{GutterWidth}," + string.Join(",", Enumerable.Repeat("*", days));
+
+        // Day headers. In the week view a click on one opens that day.
+        var header = new Grid { ColumnDefinitions = new ColumnDefinitions(columns), Margin = new Thickness(0, 0, 0, 4) };
+        for (var d = 0; d < days; d++)
+        {
+            var day = first.AddDays(d);
+            var isToday = day == DateTime.Today;
+            var number = new TextBlock { Text = day.Day.ToString(), FontSize = 15, FontWeight = isToday ? FontWeight.Bold : FontWeight.SemiBold, Foreground = isToday ? Ui.OnAccent : Ui.Tk("textSoft") };
+            var label = Ui.Row(6,
+                Ui.Apply(Ui.Text(day.ToString("ddd"), "dim", 12), t => t.VerticalAlignment = VerticalAlignment.Center),
+                isToday ? new Border { Background = Ui.Tk("accent"), CornerRadius = Ui.R(11), Padding = new Thickness(7, 0), Child = number, Classes = { "glow" } } : number);
+            Control cell = label;
+            if (days > 1)
+            {
+                var open = new Button { Content = label, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(6, 2), HorizontalAlignment = HorizontalAlignment.Left, Cursor = new Cursor(StandardCursorType.Hand) };
+                ToolTip.SetTip(open, "Show " + day.ToString("dddd d MMMM"));
+                var target = day;
+                open.Click += (_, _) => SetView(CalendarView.Day, target);
+                cell = open;
+            }
+            else cell.Margin = new Thickness(6, 2);
+            header.Children.Add(cell.At(0, 1 + d));
+        }
+
+        // All-day and multi-day events: one lane per row, each spanning the days it covers.
+        var banners = agenda.Where(a => IsBanner(a.Item, a.Occurrence)).ToList();
+        var strip = new Grid { ColumnDefinitions = new ColumnDefinitions(columns), Margin = new Thickness(0, 0, 0, 4) };
+        var laneEnds = new List<int>();
+        foreach (var (item, occ) in banners)
+        {
+            var from = Math.Max(0, (int)(occ.Start.Date - first).TotalDays);
+            // An event that ends at midnight does not reach into the next day.
+            var lastMoment = occ.EffectiveEnd > occ.Start ? occ.EffectiveEnd.AddTicks(-1) : occ.EffectiveEnd;
+            var to = Math.Min(days - 1, (int)((lastMoment.Date - first).TotalDays));
+            if (to < from) continue;
+            var lane = laneEnds.FindIndex(end => end < from);
+            if (lane < 0) { lane = laneEnds.Count; laneEnds.Add(to); strip.RowDefinitions.Add(new RowDefinition(GridLength.Auto)); }
+            else laneEnds[lane] = to;
+            var chip = new Border
+            {
+                Background = ItemBrush(item), CornerRadius = Ui.R(3), Padding = new Thickness(6, 1), Margin = new Thickness(2, 1),
+                Opacity = item.Enabled && !item.Completed ? 0.95 : 0.4, Cursor = new Cursor(StandardCursorType.Hand),
+                Child = new TextBlock { Text = (occ.Start < first ? "‹ " : "") + item.Title + (occ.EffectiveEnd >= last ? " ›" : ""), FontSize = 11.5, Foreground = ItemText(item), TextTrimming = TextTrimming.CharacterEllipsis },
+            };
+            ToolTip.SetTip(chip, Tip(item, occ));
+            EditOnDoubleClick(chip, item, occ.Start.Date < first ? first : occ.Start.Date);
+            strip.Children.Add(chip.At(lane, 1 + from, 1, to - from + 1));
+        }
+        if (laneEnds.Count > 0)
+            strip.Children.Add(Ui.Apply(Ui.Text("all day", "dim", 10.5), t => { t.VerticalAlignment = VerticalAlignment.Center; t.Margin = new Thickness(0, 0, 6, 0); t.HorizontalAlignment = HorizontalAlignment.Right; }).At(0, 0, laneEnds.Count));
+        _timeStrip.IsVisible = laneEnds.Count > 0;
+
+        // The hours.
+        var body = new Grid { ColumnDefinitions = new ColumnDefinitions(columns), Height = 24 * HourHeight, Margin = new Thickness(0, 8, 0, 8) };
+        for (var h = 0; h < 24; h++)
+        {
+            body.Children.Add(new Border { BorderBrush = Ui.Tk("lineSoft"), BorderThickness = new Thickness(0, 1, 0, 0), VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, h * HourHeight, 0, 0), IsHitTestVisible = false }.At(0, 1, 1, days));
+            if (h > 0)
+                body.Children.Add(new TextBlock
+                {
+                    Text = $"{h:00}:00", FontSize = 10.5, Foreground = Ui.Dim, Width = GutterWidth - 8, TextAlignment = TextAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, h * HourHeight - 7, 8, 0),
+                });
+        }
+
+        for (var d = 0; d < days; d++)
+        {
+            var day = first.AddDays(d);
+            var dayEnd = day.AddDays(1);
+            var weekend = day.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+            var selected = days > 1 && day == _selectedDay;
+            var column = new Grid
+            {
+                Background = selected ? Ui.Tk("cellSel") : weekend ? WeekendBrush() : Brushes.Transparent,
+                ClipToBounds = true,
+            };
+            var columnBorder = new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(1, 0, d == days - 1 ? 1 : 0, 0), Child = column };
+            ToolTip.SetTip(columnBorder, "Double-click an event to edit it, or an empty spot to add one at that time");
+            column.PointerPressed += (_, e) =>
+            {
+                if (e.Handled || !e.GetCurrentPoint(column).Properties.IsLeftButtonPressed) return;
+                if (e.ClickCount >= 2)
+                {
+                    // Start on the half hour that was clicked.
+                    var minutes = Math.Clamp(Math.Floor(e.GetPosition(column).Y / HourHeight * 2) * 30, 0, 23.5 * 60);
+                    _selectedDay = day;
+                    _ = EditAsync(null, EventKind.Calendar, day, TimeSpan.FromMinutes(minutes));
+                }
+                else if (_selectedDay != day) { _selectedDay = day; Rebuild(); }
+            };
+
+            // The pieces of timed events that fall on this day, laid out in clusters of overlapping events.
+            var pieces = agenda.Where(a => !IsBanner(a.Item, a.Occurrence) && a.Occurrence.Start < dayEnd && (a.Occurrence.End ?? a.Occurrence.Start) >= day
+                                           && !(a.Occurrence.End is { } en && en == day && a.Occurrence.Start < day))
+                .Select(a =>
+                {
+                    var start = a.Occurrence.Start < day ? day : a.Occurrence.Start;
+                    var end = a.Occurrence.End is { } e && e < dayEnd ? e : a.Occurrence.End is null ? start : dayEnd;
+                    // Events without an end, and very short ones, still get a block big enough to read.
+                    var shown = Math.Max((end - start).TotalHours, 0.5);
+                    var top = (start - day).TotalHours * HourHeight;
+                    return (a.Item, a.Occurrence, Top: top, Bottom: Math.Min(24 * HourHeight, top + shown * HourHeight));
+                })
+                .OrderBy(p => p.Top).ThenByDescending(p => p.Bottom).ToList();
+            var i = 0;
+            while (i < pieces.Count)
+            {
+                var cluster = new List<(EventItem Item, Occurrence Occ, double Top, double Bottom, int Lane)>();
+                var lanes = new List<double>();
+                var clusterTop = pieces[i].Top;
+                var clusterBottom = pieces[i].Bottom;
+                for (; i < pieces.Count && (cluster.Count == 0 || pieces[i].Top < clusterBottom); i++)
+                {
+                    var p = pieces[i];
+                    var lane = lanes.FindIndex(bottom => bottom <= p.Top);
+                    if (lane < 0) { lane = lanes.Count; lanes.Add(p.Bottom); } else lanes[lane] = p.Bottom;
+                    cluster.Add((p.Item, p.Occurrence, p.Top, p.Bottom, lane));
+                    clusterBottom = Math.Max(clusterBottom, p.Bottom);
+                }
+                var group = new Grid
+                {
+                    ColumnDefinitions = new ColumnDefinitions(string.Join(",", Enumerable.Repeat("*", lanes.Count))),
+                    VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, clusterTop, 0, 0), Height = clusterBottom - clusterTop,
+                };
+                foreach (var (item, occ, top, bottom, lane) in cluster)
+                    group.Children.Add(Ui.Apply(TimeBlock(item, occ, day, bottom - top, occ.Start <= now && occ.End is { } oe && oe > now),
+                        b => b.Margin = new Thickness(1, top - clusterTop + 1, 2, 0)).At(0, lane));
+                column.Children.Add(group);
+            }
+
+            if (day == DateTime.Today)
+            {
+                var line = new Border
+                {
+                    Height = 2, Background = Ui.Tk("error"), VerticalAlignment = VerticalAlignment.Top, IsHitTestVisible = false,
+                    Margin = new Thickness(0, Math.Max(0, (now - day).TotalHours * HourHeight - 1), 0, 0),
+                };
+                ToolTip.SetTip(line, "Now");
+                column.Children.Add(line);
+                _nowLine = (line, day);
+            }
+            body.Children.Add(columnBorder.At(0, 1 + d));
+        }
+
+        _timeHeader.Child = header;
+        _timeStrip.Child = strip;
+        _timeScroll.Content = body;
+        _calendarHost.Child = _timeLayout;
+
+        if (_scrollPending)
+        {
+            _scrollPending = false;
+            // Today: a little before now. Otherwise the first timed event, or the start of a working day.
+            var timed = agenda.Where(a => !IsBanner(a.Item, a.Occurrence) && a.Occurrence.Start >= first).Select(a => a.Occurrence.Start.TimeOfDay).DefaultIfEmpty(TimeSpan.FromHours(8)).Min();
+            var hour = DateTime.Today >= first && DateTime.Today < last ? now.TimeOfDay.TotalHours - 2 : Math.Min(timed.TotalHours, 8) - 0.5;
+            _scrollTo = Math.Max(0, hour * HourHeight);
+        }
+    }
+
+    /// <summary>One event in the week or day view.</summary>
+    private Border TimeBlock(EventItem item, Occurrence occ, DateTime day, double height, bool happening)
+    {
+        var time = occ.End is { } end
+            ? $"{(occ.Start < day ? "‹ " : "")}{occ.Start:HH:mm}–{end:HH:mm}{(end > day.AddDays(1) ? " ›" : "")}"
+            : occ.Start.ToString("HH:mm");
+        var text = new StackPanel { Spacing = 0 };
+        text.Children.Add(new TextBlock { Text = item.Title, FontSize = 11.5, FontWeight = FontWeight.SemiBold, Foreground = ItemText(item), TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = height > 40 ? TextWrapping.Wrap : TextWrapping.NoWrap, MaxHeight = Math.Max(14, height - 18) });
+        if (height >= 30) text.Children.Add(new TextBlock { Text = time, FontSize = 10.5, Foreground = ItemText(item), Opacity = 0.85, TextTrimming = TextTrimming.CharacterEllipsis });
+        if (height >= 58 && !string.IsNullOrWhiteSpace(item.Location))
+            text.Children.Add(new TextBlock { Text = item.Location, FontSize = 10.5, Foreground = ItemText(item), Opacity = 0.85, TextTrimming = TextTrimming.CharacterEllipsis });
+        var block = new Border
+        {
+            Background = ItemBrush(item), CornerRadius = Ui.R(4), Padding = new Thickness(5, 2), Height = Math.Max(16, height - 2), VerticalAlignment = VerticalAlignment.Top,
+            Opacity = item.Enabled && !item.Completed ? 0.95 : 0.45, ClipToBounds = true, Cursor = new Cursor(StandardCursorType.Hand), Child = text,
+            BorderBrush = happening ? Ui.Strong : null, BorderThickness = new Thickness(happening ? 1.5 : 0),
+        };
+        if (happening) block.Classes.Add("glow");
+        ToolTip.SetTip(block, Tip(item, occ));
+        EditOnDoubleClick(block, item, day);
+        return block;
+    }
+
     private void BuildCalendar()
     {
         _monthLabel.Text = _month.ToString("MMMM yyyy");
+        _calendarHost.Child = _calendar;
         _calendar.Children.Clear();
         for (var c = 0; c < 7; c++)
             _calendar.Children.Add(new TextBlock { Text = Week[c].ToString()[..3], Foreground = Ui.Dim, FontSize = 12, Margin = new Thickness(6, 2, 0, 6) }.At(0, c));
@@ -185,7 +510,9 @@ public sealed class EventsPage : UserControl, IPage
     private void BuildSide()
     {
         _countdowns.Clear();
+        _live.Clear();
         _side.Children.Clear();
+        if (RunningNow() is { } running) _side.Children.Add(running);
 
         var dayPanel = new StackPanel { Spacing = 8, Children = { Ui.Text(_selectedDay == DateTime.Today ? "Today" : _selectedDay.ToString("dddd, d MMMM yyyy"), "h2") } };
         var dayItems = Events.Agenda(_selectedDay, _selectedDay.AddDays(1).AddTicks(-1));
@@ -227,6 +554,105 @@ public sealed class EventsPage : UserControl, IPage
             });
             foreach (var e in done.Take(30)) _side.Children.Add(ItemCard(e));
         }
+    }
+
+    private static string Elapsed(TimeSpan t) =>
+        t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes:00}m" : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds:00}s" : $"{Math.Max(0, t.Seconds)}s";
+
+    /// <summary>
+    /// The "Running now" segment above the day: events in progress and event scripts still executing in the
+    /// background, each with how long it has been going. Null when nothing is running.
+    /// </summary>
+    private Control? RunningNow()
+    {
+        var now = DateTime.Now;
+        var occurrences = Events.InProgress(now);
+        var scripts = Events.RunningScripts;
+        if (occurrences.Count == 0 && scripts.Count == 0) return null;
+
+        var panel = new StackPanel { Spacing = 10 };
+        var count = occurrences.Count + scripts.Count(r => occurrences.All(o => o.Item.Id != r.Item.Id));
+        panel.Children.Add(Ui.Row(8,
+            Ui.Apply(Ui.Dot("ok", 9), d => { d.VerticalAlignment = VerticalAlignment.Center; d.Classes.Add("glow"); }),
+            Ui.Text(count == 1 ? "Running now" : $"Running now ({count})", "h2")));
+
+        Control ScriptRow(RunningScript run)
+        {
+            var elapsed = new TextBlock { FontSize = 11.5, Foreground = Ui.Dim, VerticalAlignment = VerticalAlignment.Center };
+            void Update() => elapsed.Text = run.Stopping ? "stopping…" : Elapsed(DateTime.Now - run.Started);
+            Update();
+            _live.Add(Update);
+            var stop = Ui.IconButton(Icons.Stop, "Stop this script", () => { Events.Stop(run); Update(); });
+            stop.IsEnabled = !run.Stopping;
+            return new DockPanel
+            {
+                Children =
+                {
+                    Ui.Row(4, elapsed, stop).Dock(Dock.Right),
+                    new TextBlock
+                    {
+                        Text = $"{(run.Phase == "end" ? "on end" : "on start")}: {run.Script.ReplaceLineEndings(" ⏎ ")}", FontFamily = Ui.Mono, FontSize = 11.5,
+                        Foreground = Ui.Tk("ok"), TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
+                    },
+                },
+            };
+        }
+
+        Control Entry(EventItem item, Control details)
+        {
+            var title = new DockPanel
+            {
+                Children =
+                {
+                    Ui.Apply(Ui.Chip(KindName(item.Kind), ItemBrush(item)), c => { ((TextBlock)c.Child!).Foreground = ItemText(item); c.Margin = new Thickness(8, 0, 0, 0); }).Dock(Dock.Right),
+                    Ui.Apply(Ui.Link(item.Title, () => _ = EditAsync(item, item.Kind, null), "Edit"), b => b.HorizontalAlignment = HorizontalAlignment.Left),
+                },
+            };
+            return new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+                Children =
+                {
+                    new Border { Width = 4, CornerRadius = Ui.R(2), Background = ItemBrush(item), Margin = new Thickness(0, 2, 8, 2) },
+                    Ui.Column(3, title, details).At(0, 1),
+                },
+            };
+        }
+
+        foreach (var (item, occ) in occurrences)
+        {
+            var end = occ.End!.Value;
+            var details = new StackPanel { Spacing = 3 };
+            var when = new TextBlock { FontSize = 12, Foreground = Ui.Tk("textSoft"), TextTrimming = TextTrimming.CharacterEllipsis };
+            var progress = new ProgressBar { Minimum = 0, Maximum = 1, Height = 4, MinHeight = 4, Foreground = ItemBrush(item) };
+            void Update()
+            {
+                var t = DateTime.Now;
+                var started = occ.Start.Date == t.Date ? occ.Start.ToString("HH:mm") : occ.Start.ToString("ddd d MMM HH:mm");
+                var ends = end.Date == t.Date ? end.ToString("HH:mm") : end.ToString("ddd d MMM HH:mm");
+                when.Text = $"since {started} ({Elapsed(t - occ.Start)}) · ends {Ui.Until(end)} ({ends})";
+                progress.Value = Math.Clamp((t - occ.Start) / (end - occ.Start), 0, 1);
+            }
+            Update();
+            _live.Add(Update);
+            details.Children.Add(when);
+            details.Children.Add(progress);
+            if (!string.IsNullOrWhiteSpace(item.Location)) details.Children.Add(LocationLine(item.Location!));
+            foreach (var run in scripts.Where(r => r.Item.Id == item.Id)) details.Children.Add(ScriptRow(run));
+            panel.Children.Add(Entry(item, details));
+        }
+        // Scripts of events that are not themselves in progress: a task or timer that triggered, an on-end script, "run now".
+        foreach (var group in scripts.Where(r => occurrences.All(o => o.Item.Id != r.Item.Id)).GroupBy(r => r.Item.Id))
+        {
+            var details = new StackPanel { Spacing = 3 };
+            foreach (var run in group) details.Children.Add(ScriptRow(run));
+            panel.Children.Add(Entry(group.First().Item, details));
+        }
+
+        var card = Ui.Card(panel);
+        card.BorderBrush = Ui.Tk("accent");
+        card.Classes.Add("glow");
+        return card;
     }
 
     private Control ItemCard(EventItem e)
@@ -364,10 +790,10 @@ public sealed class EventsPage : UserControl, IPage
         throw new ArgumentException($"{what}: could not understand the time \"{t}\". Use 24-hour HH:mm, e.g. 17:30.");
     }
 
-    private async Task EditAsync(EventItem? existing, EventKind defaultKind, DateTime? day)
+    private async Task EditAsync(EventItem? existing, EventKind defaultKind, DateTime? day, TimeSpan? time = null)
     {
         var e = existing;
-        var start0 = e?.Start ?? (day is { } dd ? dd.Date.AddHours(9) : RoundUp(DateTime.Now.AddMinutes(5)));
+        var start0 = e?.Start ?? (day is { } dd ? dd.Date + (time ?? TimeSpan.FromHours(9)) : RoundUp(DateTime.Now.AddMinutes(5)));
         var title = new TextBox { Text = e?.Title ?? "" };
         var kind = new ComboBox { HorizontalAlignment = HorizontalAlignment.Stretch, Items = { "Calendar event", "Scheduled task", "Timer" } };
         kind.SelectedIndex = (e?.Kind ?? defaultKind) switch { EventKind.Calendar => 0, EventKind.Task => 1, _ => 2 };
