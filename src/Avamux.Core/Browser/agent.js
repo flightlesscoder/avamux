@@ -41,7 +41,7 @@
   }
 
   // ---- console and errors -----------------------------------------------------------------------------------
-  A.console = []; A.errors = []; A.net = [];
+  A.console = []; A.errors = []; A.net = []; A.messages = [];
   function fmt(v, depth) {
     try {
       if (v === undefined) return 'undefined';
@@ -88,6 +88,31 @@
   window.addEventListener('unhandledrejection', function (e) {
     emit('errors', { kind: 'rejection', text: clip('Unhandled promise rejection: ' + fmt(e.reason), 4000), ts: _now() });
   });
+
+  // ---- messages posted to the main page --------------------------------------------------------------------
+  // Commands cannot reach into a cross-origin iframe, but an init script running there can postMessage what it
+  // finds to the main page; `avamux browser messages` reads them. Recorded only, never stopped or changed.
+  if (isTop) window.addEventListener('message', function (e) {
+    var from = 'window', frame = null;
+    try {
+      if (e.source === window) from = 'self';
+      else if (e.source) {
+        var frames = document.querySelectorAll('iframe, frame');
+        for (var i = 0; i < frames.length; i++) {
+          if (frames[i].contentWindow !== e.source) continue;
+          var f = frames[i];
+          var esc = window.CSS && CSS.escape ? CSS.escape : function (t) { return String(t).replace(/["\\]/g, '\\$&'); };
+          frame = f.id ? '#' + esc(f.id) : f.name ? f.tagName.toLowerCase() + '[name="' + esc(f.name) + '"]' : clip(f.getAttribute('src') || f.tagName.toLowerCase(), 300);
+          from = 'frame';
+          break;
+        }
+        if (!frame && e.source.top === window) from = 'frame';
+      }
+    } catch (x) { }
+    var rec = { origin: e.origin || '', from: from, data: clip(fmt(e.data), 4000), ts: _now() };
+    if (frame) rec.frame = frame;
+    emit('messages', rec);
+  }, true);
 
   // ---- network -----------------------------------------------------------------------------------------------
   var inflight = 0, lastNet = _now();
@@ -203,7 +228,7 @@
     var f = A.frame;
     if (!f.isConnected) { A.frame = null; throw fail('not_found', 'The selected frame has gone. Use `frame main` or pick it again.'); }
     try { if (f.contentWindow && f.contentWindow.document) return f.contentWindow; } catch (e) { }
-    throw fail('not_supported', 'That frame is from another site; its content cannot be reached.');
+    throw fail('not_supported', 'That frame is from another site; commands cannot reach into it. Run a script inside it with `avamux browser addinitscript` (it can postMessage to the main page) and read what it sends with `avamux browser messages`.');
   }
   function scopeDoc() { return scopeWin().document; }
   A.selectFrame = function (target) {

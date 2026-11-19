@@ -49,7 +49,16 @@ public sealed class BrowserService
     public static string Skill => SkillSource.Value;
 
     public BrowserLog Log(string id) => _logs.GetOrAdd(id, _ => new BrowserLog());
-    public void Forget(string id) => _logs.TryRemove(id, out _);
+    public void Forget(string id) { _logs.TryRemove(id, out _); _initScripts.TryRemove(id, out _); }
+
+    private readonly ConcurrentDictionary<string, List<BrowserInitScript>> _initScripts = new();
+
+    /// <summary>The pane's init scripts, in the order they run.</summary>
+    public IReadOnlyList<BrowserInitScript> InitScripts(string id)
+    {
+        var list = _initScripts.GetOrAdd(id, _ => []);
+        lock (list) return list.ToList();
+    }
 
     /// <summary>A batch of console/error/network records a page posted.</summary>
     public void Record(string id, JsonObject message)
@@ -566,10 +575,11 @@ public sealed class BrowserService
         if ((a.Str("action") ?? "list").ToLowerInvariant() == "clear")
         {
             var n = log.Clear(kind);
-            try { await CallAsync(s, $"(window.__avx.{(kind == "errors" ? "errors" : kind == "net" ? "net" : "console")}.length=0)"); } catch (BrowserException) { }
+            try { await CallAsync(s, $"(window.__avx.{(kind is "errors" or "net" or "messages" ? kind : "console")}.length=0)"); } catch (BrowserException) { }
             return $"cleared {n}";
         }
         IEnumerable<JsonObject> items = log.Get(kind);
+        if (kind == "messages" && a.Str("origin") is { } origin) items = items.Where(x => x["origin"]?.ToString().Contains(origin, StringComparison.OrdinalIgnoreCase) == true);
         if (a.Str("level") is { } level) items = items.Where(x => string.Equals(x["level"]?.ToString(), level, StringComparison.OrdinalIgnoreCase) || level == "warn" && x["level"]?.ToString() == "warning");
         if (a.Str("filter") is { } f) items = items.Where(x => x.ToJsonString().Contains(f, StringComparison.OrdinalIgnoreCase));
         if (kind == "net" && a.Flag("failed")) items = items.Where(x => x["failed"]?.GetValue<bool>() == true || x["status"] is JsonValue st && st.TryGetValue<int>(out var code) && code >= 400);
@@ -582,6 +592,66 @@ public sealed class BrowserService
             return (JsonNode)x;
         }).ToArray();
         return new JsonArray(shown);
+    }
+
+    // ---- scripts at the start of every page ----------------------------------------------------------------------
+
+    /// <summary>
+    /// Adds a script that runs at the start of every page the pane loads from now on, before the page's own scripts,
+    /// in every frame (cross-origin iframes too, where nothing else from the commands reaches) unless --main-frame.
+    /// </summary>
+    public async Task<JsonNode?> AddInitScriptAsync(Args a)
+    {
+        EnsureAllowed();
+        var s = Resolve(a);
+        var source = a.Str("file") is { } file ? await File.ReadAllTextAsync(Path.GetFullPath(file)) : a.Str("script");
+        if (string.IsNullOrWhiteSpace(source)) throw new BrowserException("invalid_params", "Give the script, or --file with it.");
+        var list = _initScripts.GetOrAdd(s.Id, _ => []);
+        BrowserInitScript added;
+        List<BrowserInitScript> all;
+        lock (list)
+        {
+            var next = 1 + list.Select(x => int.TryParse(x.Id.AsSpan(1), out var n) ? n : 0).DefaultIfEmpty(0).Max();
+            added = new BrowserInitScript("i" + next, source, a.Flag("main-frame"));
+            all = [.. list, added];
+        }
+        await Surfaces.SetInitScriptsAsync(s.Id, all); // refused where the platform cannot run scripts at document start
+        lock (list) list.Add(added);
+        return $"{added.Id} added: it runs at the start of every page{(added.MainFrameOnly ? "" : " and frame (cross-origin iframes too)")} from the next load. " +
+            "`avamux browser reload` runs it on this page.";
+    }
+
+    /// <summary>The pane's init scripts: list, remove &lt;id&gt; or clear.</summary>
+    public async Task<JsonNode?> InitScriptsAsync(Args a)
+    {
+        EnsureAllowed();
+        var s = Resolve(a);
+        var list = _initScripts.GetOrAdd(s.Id, _ => []);
+        var action = (a.Str("action") ?? "list").ToLowerInvariant();
+        if (action == "list")
+        {
+            lock (list)
+                return new JsonArray(list.Select(x => (JsonNode)new JsonObject
+                {
+                    ["id"] = x.Id, ["frames"] = x.MainFrameOnly ? "main" : "all", ["lines"] = x.Source.Split('\n').Length, ["script"] = Clip(x.Source.Trim(), 200),
+                }).ToArray());
+        }
+        if (action is not ("remove" or "clear")) throw new BrowserException("invalid_params", "initscripts list, remove <id> or clear.");
+        List<BrowserInitScript> keep;
+        lock (list)
+        {
+            if (action == "clear") keep = [];
+            else
+            {
+                var id = a.Str("id") ?? throw new BrowserException("invalid_params", "Say which: initscripts remove i1.");
+                if (list.All(x => x.Id != id)) throw new BrowserException("not_found", $"No init script '{id}'. `avamux browser initscripts` lists them.");
+                keep = list.Where(x => x.Id != id).ToList();
+            }
+        }
+        await Surfaces.SetInitScriptsAsync(s.Id, keep);
+        int removed;
+        lock (list) { removed = list.Count - keep.Count; list.Clear(); list.AddRange(keep); }
+        return $"removed {removed}; pages already loaded keep what they ran";
     }
 
     public async Task<JsonNode?> CookiesAsync(Args a)

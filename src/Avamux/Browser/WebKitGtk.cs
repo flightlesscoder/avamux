@@ -32,11 +32,11 @@ internal static class WebKitGtk
 
     // ---- scripts at document start ----
 
-    /// <summary>Adds a script that runs at the start of every document in every frame. Returns it, for removal.</summary>
-    public static Task<IntPtr> AddUserScriptAsync(IntPtr view, string source) => OnGlib(() =>
+    /// <summary>Adds a script that runs at the start of every document in every frame (or only the main one). Returns it, for removal.</summary>
+    public static Task<IntPtr> AddUserScriptAsync(IntPtr view, string source, bool mainFrameOnly = false) => OnGlib(() =>
     {
         var manager = webkit_web_view_get_user_content_manager(view);
-        var script = webkit_user_script_new(source, 0 /* all frames */, 0 /* document start */, IntPtr.Zero, IntPtr.Zero);
+        var script = webkit_user_script_new(source, mainFrameOnly ? 1 /* top frame */ : 0 /* all frames */, 0 /* document start */, IntPtr.Zero, IntPtr.Zero);
         webkit_user_content_manager_add_script(manager, script);
         return script; // keeps our reference, released in RemoveUserScriptAsync
     });
