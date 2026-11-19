@@ -14,6 +14,7 @@ public sealed class EventService : IDisposable
     private Timer? _timer;
     private DateTime _lastTick;
     private int _ticking;
+    private readonly List<RunningScript> _running = [];
 
     public EventService(AppPaths paths, ConfigService config)
     {
@@ -129,6 +130,29 @@ public sealed class EventService : IDisposable
 
     public Occurrence? NextOccurrence(EventItem item) => item.Completed || !item.Enabled ? null : RecurrenceCalculator.Next(item, Now());
 
+    /// <summary>Scripts of events that are running right now, oldest first.</summary>
+    public IReadOnlyList<RunningScript> RunningScripts { get { lock (_gate) return _running.ToList(); } }
+
+    /// <summary>Asks a running script to stop. It is killed, and its log says it was stopped.</summary>
+    public void Stop(RunningScript run)
+    {
+        run.Stopping = true;
+        try { run.Cancel.Cancel(); } catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>
+    /// Enabled events whose occurrence has started but not yet ended at <paramref name="now"/>, such as a meeting
+    /// in progress. All-day events and events without an end are left out: they are not "running".
+    /// </summary>
+    public IReadOnlyList<(EventItem Item, Occurrence Occurrence)> InProgress(DateTime now)
+    {
+        var list = new List<(EventItem, Occurrence)>();
+        foreach (var item in Items.Where(i => i.Enabled && !i.AllDay))
+            foreach (var o in RecurrenceCalculator.Between(item, now, now).Take(50))
+                if (o.End is { } end && o.Start <= now && end > now) list.Add((item, o));
+        return list.OrderBy(x => x.Item2.Start).ToList();
+    }
+
     /// <summary>Everything happening in [from, to], for calendar views.</summary>
     public IReadOnlyList<(EventItem Item, Occurrence Occurrence)> Agenda(DateTime from, DateTime to)
     {
@@ -195,17 +219,31 @@ public sealed class EventService : IDisposable
             ["AVAMUX_EVENT_ID"] = item.Id, ["AVAMUX_EVENT_TITLE"] = item.Title, ["AVAMUX_EVENT_KIND"] = item.Kind.ToString().ToLowerInvariant(),
             ["AVAMUX_EVENT_PHASE"] = phase, ["AVAMUX_EVENT_START"] = o.Start.ToString("O"), ["AVAMUX_EVENT_END"] = o.End?.ToString("O") ?? "",
         };
-        var result = await Shell.RunAsync(script, _paths.HomeDir, env, TimeSpan.FromSeconds(Math.Max(1, _config.Settings.Events.ScriptTimeoutSeconds)));
+        var run = new RunningScript { Item = item, Phase = phase, Script = script, Started = Now() };
+        lock (_gate) _running.Add(run);
+        Changed?.Invoke();
+        Shell.RunResult result;
+        try
+        {
+            result = await Shell.RunAsync(script, _paths.HomeDir, env, TimeSpan.FromSeconds(Math.Max(1, _config.Settings.Events.ScriptTimeoutSeconds)), run.Cancel.Token);
+        }
+        finally
+        {
+            lock (_gate) _running.Remove(run);
+            run.Cancel.Dispose();
+        }
+        // Shell.RunAsync reports a cancellation as a time-out; tell the two apart.
+        var outcome = run.Stopping && result.TimedOut ? "stopped" : result.TimedOut ? "timed out" : $"exit {result.ExitCode}";
         var safe = Regex.Replace(item.Title, "[^A-Za-z0-9._-]+", "_").Trim('_');
         var file = Path.Combine(_paths.EventLogsDir, $"{DateTime.Now:yyyyMMdd-HHmmss}-{safe}-{phase}.log");
         try
         {
-            await File.WriteAllTextAsync(file, $"# event {item.Id} \"{item.Title}\" ({phase})\n# script: {script}\n# exit code: {(result.TimedOut ? "timed out" : result.ExitCode)}\n\n{result.Stdout}" +
+            await File.WriteAllTextAsync(file, $"# event {item.Id} \"{item.Title}\" ({phase})\n# script: {script}\n# exit code: {(result.TimedOut ? outcome : result.ExitCode)}\n\n{result.Stdout}" +
                 (result.Stderr.Length > 0 ? $"\n--- stderr ---\n{result.Stderr}" : ""));
         }
         catch { }
-        item.LastRunSummary = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {phase}: " + (result.TimedOut ? "timed out" : $"exit {result.ExitCode}");
-        Log.Write(result.ExitCode == 0 ? LogLevel.Info : LogLevel.Warn, "events", $"Script for \"{item.Title}\" ({phase}) finished: {(result.TimedOut ? "timed out" : "exit " + result.ExitCode)} → {Path.GetFileName(file)}");
+        item.LastRunSummary = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {phase}: {outcome}";
+        Log.Write(result.ExitCode == 0 ? LogLevel.Info : LogLevel.Warn, "events", $"Script for \"{item.Title}\" ({phase}) finished: {outcome} → {Path.GetFileName(file)}");
         Save();
         return result;
     }

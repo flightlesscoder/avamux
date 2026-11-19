@@ -13,6 +13,8 @@ public sealed class UiStateData
 {
     /// <summary>Whether the event dialog shows the rendered description. Applies to the dialog, not to one event.</summary>
     public bool EventDescriptionPreview { get; set; } = true;
+    /// <summary>Which calendar the Events page shows: month, week or day.</summary>
+    public string EventsView { get; set; } = "month";
     public bool PullRequestsMineOnly { get; set; }
     public bool PullRequestsActiveOnly { get; set; } = true;
     /// <summary>Search sources that are switched off. Empty means everything is searched.</summary>

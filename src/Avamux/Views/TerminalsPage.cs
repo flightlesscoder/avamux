@@ -159,18 +159,40 @@ public sealed class TerminalsPage : UserControl, IPage
 
     private void ApplyBackground() => _termPanel.Background = Ui.Raw(App.Services.Web.TerminalOptions()["background"]!.GetValue<string>());
 
-    public void OnShown() => Dispatcher.UIThread.Post(FocusTerminal, DispatcherPriority.Background);
+    public void OnShown() => QueueFocus();
+
+    private bool _focusQueued;
+    private long _focusedAt = long.MinValue / 2;
+
+    /// <summary>Hands the keyboard to the terminal once the current work is done; repeated requests share one hand-over.</summary>
+    private void QueueFocus()
+    {
+        if (_focusQueued) return;
+        _focusQueued = true;
+        Dispatcher.UIThread.Post(() => { _focusQueued = false; FocusTerminal(); }, DispatcherPriority.Background);
+    }
 
     private void OnWindowActivated(object? sender, EventArgs e)
     {
-        if (IsEffectivelyVisible && _editingId is null) OnShown();
+        if (!IsEffectivelyVisible || _editingId is not null) return;
+        // Giving the web view the keyboard can itself make a window report "activated" again (on macOS the web view
+        // becomes the window's first responder). Acting on that would focus again, and again, keeping the UI thread and
+        // the page busy. An activation that follows our own hand-over this closely is that echo, not the user.
+        if (Environment.TickCount64 - _focusedAt < FocusEchoMs) return;
+        QueueFocus();
     }
+
+    private const long FocusEchoMs = 300;
 
     private void FocusTerminal()
     {
+        _focusedAt = Environment.TickCount64;
         WebViews.FocusNative(_web);
         if (_ready) _ = Js("avamux.focus()");
     }
+
+    /// <summary>True while this view's window is the one the user is working in.</summary>
+    private bool InActiveWindow => IsEffectivelyVisible && TopLevel.GetTopLevel(this) is Window { IsActive: true };
 
     private async Task<string?> Js(string script)
     {
@@ -274,7 +296,9 @@ public sealed class TerminalsPage : UserControl, IPage
         SelectedId = s.Id;
         RebuildTabs();
         if (_ready) _ = ShowAsync(s.Id);
-        if (IsVisible) WebViews.FocusNative(_web);
+        // A window in the background must not take the keyboard (it happens here when a tab moves out of it and
+        // the next tab is selected); it gets the terminal focused when it is activated again.
+        if (InActiveWindow) FocusTerminal();
     }
 
     private async Task ShowAsync(string id)

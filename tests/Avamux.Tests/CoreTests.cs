@@ -303,6 +303,49 @@ public class EventServiceTests
     }
 
     [Fact]
+    public async Task A_running_script_is_listed_until_it_finishes_and_can_be_stopped()
+    {
+        using var box = new Sandbox();
+        using var config = new ConfigService(box.Paths);
+        using var events = new EventService(box.Paths, config);
+        var e = events.Add(new EventItem { Title = "Long job", Kind = EventKind.Task, Start = DateTime.Now.AddHours(1), OnStartScript = "sleep 30" });
+        var run = events.RunScriptAsync(e, "start", new Occurrence(DateTime.Now, null), e.OnStartScript!);
+        var listed = Assert.Single(events.RunningScripts);
+        Assert.Same(e, listed.Item);
+        Assert.Equal("start", listed.Phase);
+
+        events.Stop(listed);
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(result.TimedOut);
+        Assert.Empty(events.RunningScripts);
+        Assert.Contains("stopped", e.LastRunSummary);
+    }
+
+    [Fact]
+    public void In_progress_lists_events_between_their_start_and_end()
+    {
+        using var box = new Sandbox();
+        using var config = new ConfigService(box.Paths);
+        var now = new DateTime(2026, 11, 19, 10, 0, 0);
+        using var events = new EventService(box.Paths, config) { Now = () => now };
+        events.Add(new EventItem { Title = "Meeting", Start = now.AddMinutes(-15), End = now.AddMinutes(45) });
+        events.Add(new EventItem { Title = "Later", Start = now.AddHours(2), End = now.AddHours(3) });
+        events.Add(new EventItem { Title = "No end", Start = now.AddMinutes(-5) });
+        events.Add(new EventItem { Title = "Holiday", Start = now.Date, End = now.Date.AddDays(1).AddSeconds(-1), AllDay = true });
+        events.Add(new EventItem { Title = "Off", Start = now.AddMinutes(-15), End = now.AddMinutes(45), Enabled = false });
+        events.Add(new EventItem
+        {
+            Title = "Standup", Start = now.Date.AddDays(-7).AddHours(9).AddMinutes(50), End = now.Date.AddDays(-7).AddHours(10).AddMinutes(5),
+            Recurrence = new Recurrence { Freq = RecurrenceFreq.Daily },
+        });
+
+        var running = events.InProgress(now);
+        Assert.Equal(["Standup", "Meeting"], running.Select(r => r.Item.Title).OrderByDescending(t => t));
+        Assert.Equal(now.Date.AddHours(9).AddMinutes(50), running.Single(r => r.Item.Title == "Standup").Occurrence.Start);
+        Assert.Empty(events.InProgress(now.AddMinutes(45)));
+    }
+
+    [Fact]
     public void Events_survive_a_restart()
     {
         using var box = new Sandbox();
