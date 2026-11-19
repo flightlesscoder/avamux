@@ -239,6 +239,30 @@ public sealed partial class CommandRegistry
                 ["title"] = x.Item.Title, ["kind"] = x.Item.Kind.ToString().ToLowerInvariant(), ["id"] = x.Item.Id,
             }).ToArray());
         });
+        Add("event running", "List what is running now: events in progress and event scripts still executing.", [], _ =>
+        {
+            var now = DateTime.Now;
+            return new JsonObject
+            {
+                ["inProgress"] = new JsonArray(s.Events.InProgress(now).Select(x => (JsonNode)new JsonObject
+                {
+                    ["id"] = x.Item.Id, ["title"] = x.Item.Title, ["kind"] = x.Item.Kind.ToString().ToLowerInvariant(),
+                    ["start"] = x.Occurrence.Start.ToString("yyyy-MM-ddTHH:mm:ss"), ["end"] = x.Occurrence.End?.ToString("yyyy-MM-ddTHH:mm:ss"),
+                }).ToArray()),
+                ["scripts"] = new JsonArray(s.Events.RunningScripts.Select(r => (JsonNode)new JsonObject
+                {
+                    ["id"] = r.Item.Id, ["title"] = r.Item.Title, ["phase"] = r.Phase, ["started"] = r.Started.ToString("yyyy-MM-ddTHH:mm:ss"),
+                    ["seconds"] = Math.Round((now - r.Started).TotalSeconds), ["script"] = r.Script,
+                }).ToArray()),
+            };
+        });
+        Add("event stop", "Stop the running scripts of an event.", [P("id", "Event id or title.", true)], a =>
+        {
+            var e = s.Events.Get(a.Require("id"));
+            var runs = s.Events.RunningScripts.Where(r => r.Item.Id == e.Id).ToList();
+            foreach (var r in runs) s.Events.Stop(r);
+            return runs.Count == 0 ? "nothing running" : $"stopped {runs.Count}";
+        });
         Add("event run", "Run an event's script right now.", [P("id", "Event id or title.", true), F("end", "Run the on-end script instead of on-start.")], async a =>
         {
             var e = s.Events.Get(a.Require("id"));
