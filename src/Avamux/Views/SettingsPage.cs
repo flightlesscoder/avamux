@@ -135,6 +135,9 @@ public sealed class SettingsPage : UserControl, IPage
     private readonly List<(Control Card, List<string> Keys)> _cards = [];
     private readonly List<Control> _filterHidden = [];
     private readonly CustomPagesCard _customPages = new();
+    private readonly StackPanel _hotkeys = new() { Spacing = 16 };
+    private readonly Border _hotkeysCard;
+    private string _hotkeyQuery = "";
     private bool _loading;
 
     private static ConfigService Config => App.Services.Config;
@@ -197,6 +200,17 @@ public sealed class SettingsPage : UserControl, IPage
             // The navigation is part of the window, so the user's own pages come right after its settings.
             if (prefix == "ui") body.Children.Add(_customPages);
         }
+        _hotkeysCard = Ui.Card(new StackPanel
+        {
+            Spacing = 12,
+            Children =
+            {
+                Ui.Text("Hotkeys", "h2"),
+                Ui.Text("Every key avamux handles, by where it works. Only the boss key can be changed (Window, above).", "dim", 12.5),
+                _hotkeys,
+            },
+        });
+        body.Children.Add(_hotkeysCard);
         _filterHidden.Add(_themeTiles);
 #if EASTER_EGGS
         EasterEggs.DriveA.Attach(_find, body, _filterHidden, () => { if (_find.Text?.Length > 0) _find.Text = ""; });
@@ -257,9 +271,57 @@ public sealed class SettingsPage : UserControl, IPage
         }
         foreach (var c in _filterHidden) c.IsVisible = hits is null;
         _customPages.IsVisible = hits is null || _customPages.Matches(query);
-        _findStatus.Text = hits is null ? "" : shown > 0 ? $"{shown} setting{(shown == 1 ? "" : "s")}" : _customPages.IsVisible ? "" : "Nothing found";
+        _hotkeyQuery = query;
+        var hotkeys = BuildHotkeys();
+        var counts = new List<string>();
+        if (shown > 0) counts.Add($"{shown} setting{(shown == 1 ? "" : "s")}");
+        if (hotkeys > 0) counts.Add($"{hotkeys} hotkey{(hotkeys == 1 ? "" : "s")}");
+        _findStatus.Text = hits is null ? "" : counts.Count > 0 ? string.Join(", ", counts) : _customPages.IsVisible ? "" : "Nothing found";
         if (hits is not null) _scroll.Offset = default;
     }
+
+    /// <summary>Fills the Hotkeys card with the shortcuts that match the search box (all of them when it is empty); returns how many.</summary>
+    private int BuildHotkeys()
+    {
+        _hotkeys.Children.Clear();
+        var count = 0;
+        foreach (var group in Hotkeys.All(Config.Settings))
+        {
+            var entries = group.Entries.Where(e => _hotkeyQuery.Length == 0 || Hotkeys.Matches(group, e, _hotkeyQuery)).ToList();
+            if (entries.Count == 0) continue;
+            count += entries.Count;
+            var block = new StackPanel { Spacing = 5 };
+            block.Children.Add(new TextBlock { Text = group.Where, FontWeight = FontWeight.SemiBold, FontSize = 13.5 });
+            if (group.Note is { } note) block.Children.Add(Ui.Text(note, "dim", 12));
+            foreach (var entry in entries)
+            {
+                var keys = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 380 };
+                for (var i = 0; i < entry.Keys.Length; i++)
+                {
+                    if (i > 0) keys.Children.Add(new TextBlock { Text = "or", Foreground = Ui.Dim, FontSize = 11, Margin = new Thickness(6, 0), VerticalAlignment = VerticalAlignment.Center });
+                    keys.Children.Add(KeyCap(entry.Keys[i]));
+                }
+                block.Children.Add(new DockPanel
+                {
+                    Children =
+                    {
+                        Ui.Apply(keys, k => k.Margin = new Thickness(16, 2, 0, 2)).Dock(Dock.Right),
+                        new TextBlock { Text = entry.Action, TextWrapping = TextWrapping.Wrap, FontSize = 12.5, VerticalAlignment = VerticalAlignment.Center },
+                    },
+                });
+            }
+            _hotkeys.Children.Add(block);
+        }
+        _hotkeysCard.IsVisible = count > 0;
+        return count;
+    }
+
+    private static Border KeyCap(string keys) => new()
+    {
+        Background = Ui.Tk("bgEditor"), BorderBrush = Ui.Tk("lineStrong"), BorderThickness = new Thickness(1, 1, 1, 2), CornerRadius = new CornerRadius(4),
+        Padding = new Thickness(7, 1), Margin = new Thickness(0, 1), VerticalAlignment = VerticalAlignment.Center,
+        Child = new TextBlock { Text = keys, FontFamily = Ui.Mono, FontSize = 12, Foreground = Ui.Tk("textCode") },
+    };
 
     /// <summary>Scrolls to a setting and marks it for a moment (used by Search).</summary>
     public void Reveal(string key)
@@ -517,6 +579,7 @@ public sealed class SettingsPage : UserControl, IPage
             foreach (var v in Config.Describe())
                 if (_updaters.TryGetValue(v.Path, out var update)) update(v);
             BuildThemeTiles();
+            BuildHotkeys(); // the boss key and the terminal link click come from settings
             _themeProblems.Children.Clear();
             foreach (var (file, problems) in App.Services.ThemeFiles.Problems)
                 _themeProblems.Children.Add(new TextBlock
