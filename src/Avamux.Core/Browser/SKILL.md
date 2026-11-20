@@ -93,7 +93,7 @@ if (window !== window.top && location.hostname.endsWith('payments.example')) {
 `#id` or address, `data`), kept across loads; `messages clear` empties it. A frame's `console.log` also
 shows up in `console`. `--main-frame` limits a script to the main page. `initscripts` lists them,
 `initscripts remove i1` / `initscripts clear` take them away (pages already loaded keep what they ran).
-Init scripts need WebKitGTK (Linux); elsewhere `addinitscript` answers `not_supported`.
+Init scripts need WebKitGTK (Linux) or WKWebView (macOS); elsewhere `addinitscript` answers `not_supported`.
 
 Viewport: `viewport 390 844` (CSS pixels, fitted into the pane), `viewport reset`, `zoom in|out|reset|1.5`.
 
