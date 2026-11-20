@@ -1,6 +1,6 @@
 // avamux browser agent. Runs inside pages shown in avamux browser panes: it records the console, errors and network
 // requests from the start of the page, and gives the `avamux browser` commands their snapshot, refs and actions.
-// It is added at document start where the platform allows (WebKitGTK) and otherwise on first use.
+// It is added at document start where the platform allows (WebKitGTK, WKWebView) and otherwise on first use.
 (function () {
   'use strict';
   var VERSION = '__AVX_VERSION__';

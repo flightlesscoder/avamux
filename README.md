@@ -300,7 +300,7 @@ act on: `not_found` (a stale ref: snapshot again), `invalid_state`, `timeout`, `
 
 `frame` only reaches iframes of the same site. For a cross-origin iframe, `addinitscript` (as in cmux) adds a script
 that runs at the start of every page from the next load on, before the page's own scripts, in every frame, cross-origin
-ones included (`--main-frame` for the main page only; on WebKitGTK). The script can `postMessage` what it finds to the
+ones included (`--main-frame` for the main page only; on WebKitGTK and WKWebView). The script can `postMessage` what it finds to the
 main page, and `avamux browser messages` lists what the main page received (origin, which frame, data).
 `initscripts` lists them, `initscripts remove i1` and `initscripts clear` take them away.
 
@@ -313,9 +313,9 @@ swaps plain click and Ctrl+click; `browser.externalSites` lists sites that alway
 
 What the system web view cannot do (as in cmux): intercept or mock network requests, emulate offline or a
 location, record traces, or report response bodies and HttpOnly cookies. Screenshots, an exact viewport, docking the
-inspector, the page's dialogs as a bar above it, and recording the console from the very start of a page need
-WebKitGTK (Linux); on macOS (not yet tried there) the console is recorded from the first command on a page. Panes are
-not restored when avamux restarts, as terminals are not.
+inspector and the page's dialogs as a bar above it need WebKitGTK (Linux). On macOS (not yet tried there) WKWebView
+gets the agent and the init scripts at the start of every page too, so the console is recorded from the very start and
+cross-origin frames are reached. Panes are not restored when avamux restarts, as terminals are not.
 
 ## Caffeine
 

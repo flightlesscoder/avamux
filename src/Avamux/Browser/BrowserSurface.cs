@@ -29,6 +29,7 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
     private readonly TextBlock _blank = new() { Text = "", Foreground = Ui.Dim, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private string _initialUrl;
     private IntPtr _view, _userScript, _dialog;
+    private IntPtr _wkWebView; // macOS: the WKWebView, while Avalonia's adapter has it (not retained by us)
     private readonly List<IntPtr> _initScriptHandles = [];
     private IReadOnlyList<BrowserInitScript> _initScripts = [];
     private bool _adapterReady, _addressEditing;
@@ -119,6 +120,7 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
             // The native view went (it was out of every window for too long). Should it come back, it reopens this page.
             Log.Warn("browser", $"Browser pane {Id}: the native web view was destroyed ({Url})");
             if (_view != IntPtr.Zero) { WebKitGtk.Disconnect(_view); _view = IntPtr.Zero; _userScript = IntPtr.Zero; }
+            if (_wkWebView != IntPtr.Zero) { WebKitMac.Forget(_wkWebView); _wkWebView = IntPtr.Zero; }
             _dialog = IntPtr.Zero; Dialog = null;
             _adapterReady = false;
             _initialUrl = Url;
@@ -283,6 +285,13 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
                 await InstallInitScriptsAsync();
                 if (Math.Abs(Zoom - 1) > 0.001) await WebKitGtk.SetZoomAsync(view, Zoom);
             }
+            else if (WebKitMac.Supported && Web.TryGetPlatformHandle() is IAppleWKWebViewPlatformHandle { WKWebView: var wk } && wk != IntPtr.Zero)
+            {
+                // The agent and the init scripts as real user scripts: at document start, in every frame. Without
+                // this the agent only arrives with the first command on a page, and never in cross-origin frames.
+                _wkWebView = wk;
+                InstallMacScripts();
+            }
         }
         catch (Exception ex) { Log.Warn("browser", $"Browser pane {Id}: WebKit set-up failed: {ex.Message}"); }
         _adapterReady = true;
@@ -375,6 +384,10 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
             _userScript = await WebKitGtk.AddUserScriptAsync(_view, BrowserService.AgentScript(on));
             await InstallInitScriptsAsync(); // after the agent again, so it still sees what they log
         }
+        else if (_wkWebView != IntPtr.Zero)
+        {
+            try { InstallMacScripts(); } catch (Exception ex) { Log.Warn("browser", $"Browser pane {Id}: could not reinstall the page scripts: {ex.Message}"); }
+        }
         try { await Web.InvokeScript(BrowserService.Wrap($"window.__avx.keepAlive({(on ? "true" : "false")})", on)); } catch { }
         BrowserHost.Instance.Sync();
     }
@@ -382,10 +395,23 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
     /// <summary>Replaces the scripts that run at the start of every page (after the agent, before the page's own).</summary>
     public async Task SetInitScriptsAsync(IReadOnlyList<BrowserInitScript> scripts)
     {
-        if (!WebKitGtk.Supported)
-            throw new BrowserException("not_supported", "Scripts at the start of every page need WebKitGTK; on this system run them after the load with `avamux browser eval`.");
+        if (!WebKitGtk.Supported && !WebKitMac.Supported)
+            throw new BrowserException("not_supported", "Scripts at the start of every page need WebKitGTK or WKWebView; on this system run them after the load with `avamux browser eval`.");
         _initScripts = scripts.ToList();
-        if (_view != IntPtr.Zero) await InstallInitScriptsAsync(); // otherwise when the view is set up
+        // Otherwise when the view is set up.
+        if (_view != IntPtr.Zero) await InstallInitScriptsAsync();
+        else if (_wkWebView != IntPtr.Zero) InstallMacScripts();
+    }
+
+    /// <summary>
+    /// WKWebView can only drop its scripts all at once, so the agent and the init scripts are put in again as a whole
+    /// list every time (after the scripts that were there before avamux's, which <see cref="WebKitMac"/> keeps).
+    /// </summary>
+    private void InstallMacScripts()
+    {
+        var list = new List<(string, bool)> { (BrowserService.AgentScript(KeepAlive), false) };
+        list.AddRange(_initScripts.Select(s => (s.Source, s.MainFrameOnly)));
+        WebKitMac.SetUserScripts(_wkWebView, list);
     }
 
     private async Task InstallInitScriptsAsync()
@@ -702,5 +728,6 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
             WebKitGtk.Disconnect(_view);
             _view = IntPtr.Zero;
         }
+        if (_wkWebView != IntPtr.Zero) { WebKitMac.Forget(_wkWebView); _wkWebView = IntPtr.Zero; }
     }
 }
