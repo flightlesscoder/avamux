@@ -253,7 +253,7 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
             var file = Path.Combine(App.Services.Paths.DataDir, "browser", "captures", $"{Id}-{DateTime.Now:yyyyMMdd-HHmmss}.png");
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             try { await ScreenshotAsync(file, false); Ui.Toast(this, "Screenshot saved", file); } catch (Exception ex) { Ui.Toast(this, "No screenshot", ex.Message); }
-        }, WebKitGtk.Supported, Icons.Camera));
+        }, WebKitGtk.Supported || WebKitMac.Supported, Icons.Camera));
         m.Items.Add(new Separator());
         m.Items.Add(Ui.Item(DevToolsOpen ? "Close developer tools" : "Developer tools", () => _ = DevToolsAsync("toggle"), icon: Icons.Bug));
         if (WebKitGtk.Supported)
@@ -526,8 +526,26 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
 
     public async Task ScreenshotAsync(string file, bool fullPage)
     {
-        if (_view == IntPtr.Zero) throw new BrowserException("not_supported", "Screenshots of the page need WebKitGTK (Linux).");
-        await WebKitGtk.SnapshotAsync(_view, file, fullPage);
+        if (_view != IntPtr.Zero) await WebKitGtk.SnapshotAsync(_view, file, fullPage);
+        else if (_wkWebView != IntPtr.Zero) await WebKitMac.SnapshotAsync(_wkWebView, file, fullPage ? await DocumentRectAsync() : null);
+        else throw new BrowserException("not_supported", "Screenshots of the page need WebKitGTK (Linux) or WKWebView (macOS).");
+    }
+
+    /// <summary>
+    /// The whole document in the web view's coordinates, for a full-page snapshot on macOS: it starts above and left of
+    /// the view by however far the page is scrolled. Very long pages are cut at 16,384 points (a bitmap of hundreds of
+    /// megabytes otherwise).
+    /// </summary>
+    private async Task<WebKitMac.CGRect> DocumentRectAsync()
+    {
+        const string script = "(function(){var e=document.scrollingElement||document.documentElement,z=parseFloat(document.documentElement.style.zoom)||1;"
+            + "return JSON.stringify([scrollX*z,scrollY*z,Math.max(e.scrollWidth*z,innerWidth*z),Math.max(e.scrollHeight*z,innerHeight*z)]);})()";
+        var raw = await Web.InvokeScript(script);
+        var node = raw is null ? null : JsonNode.Parse(raw);
+        if (node is JsonValue v && v.TryGetValue<string>(out var inner)) node = JsonNode.Parse(inner);
+        if (node is not JsonArray { Count: 4 } a) throw new BrowserException("js_error", "Could not measure the page for a full-page screenshot.");
+        double At(int i) => a[i]!.GetValue<double>();
+        return new WebKitMac.CGRect(-At(0), -At(1), Math.Min(At(2), 16384), Math.Min(At(3), 16384));
     }
 
     public async Task PdfAsync(string file)

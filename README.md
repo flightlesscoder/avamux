@@ -312,10 +312,11 @@ swaps plain click and Ctrl+click; `browser.externalSites` lists sites that alway
 `browser.agentControl` switches command-line control off.
 
 What the system web view cannot do (as in cmux): intercept or mock network requests, emulate offline or a
-location, record traces, or report response bodies and HttpOnly cookies. Screenshots, an exact viewport, docking the
-inspector and the page's dialogs as a bar above it need WebKitGTK (Linux). On macOS (not yet tried there) WKWebView
-gets the agent and the init scripts at the start of every page too, so the console is recorded from the very start and
-cross-origin frames are reached. Panes are not restored when avamux restarts, as terminals are not.
+location, record traces, or report response bodies and HttpOnly cookies. An exact viewport, docking the inspector and
+the page's dialogs as a bar above it need WebKitGTK (Linux). Screenshots work with WebKitGTK and with WKWebView on macOS
+(not yet tried there; `--full` on macOS captures at most 16,384 points of the page, and content the GPU draws, such
+as WebGL and video, can come out blank). On macOS WKWebView gets the agent and the init scripts at the start of every
+page too, so the console is recorded from the very start and cross-origin frames are reached. Panes are not restored when avamux restarts, as terminals are not.
 
 ## Caffeine
 
