@@ -26,9 +26,7 @@ public sealed class MarkdownColorizer : DocumentColorizingTransformer
     }
 
     /// <summary>Forget the tokens; the next paint tokenizes again.</summary>
-    public void Invalidate() { _lines = null; _tags = null; }
-
-    private Dictionary<int, List<Avamux.Core.Wiki.TagMention>>? _tags;
+    public void Invalidate() => _lines = null;
 
     protected override void ColorizeLine(DocumentLine line)
     {
@@ -53,15 +51,13 @@ public sealed class MarkdownColorizer : DocumentColorizingTransformer
             }
             at += length;
         }
-        // #tags in the accent colour (only those WikiTags counts: not in code, links or URLs).
-        _tags ??= Avamux.Core.Wiki.WikiTags.Find(CurrentContext.Document.Text).GroupBy(m => m.Line).ToDictionary(g => g.Key, g => g.ToList());
-        if (!_tags.TryGetValue(line.LineNumber, out var mentions)) return;
+        // #tags in the accent colour: only on the lines drawn, and not in code (the highlighter marks fenced lines as one span).
+        var lineSpans = _lines[index];
+        if (lineSpans.Count == 1 && lineSpans[0].Kind is Tok.String or Tok.Meta) return;
+        var text = CurrentContext.Document.GetText(line);
+        if (text.IndexOf('#') < 0) return;
         var accent = Ui.Tk("accent");
-        foreach (var m in mentions)
-        {
-            var start = line.Offset + m.Offset;
-            if (m.Offset + m.Length > line.Length || CurrentContext.Document.GetCharAt(start) != '#') continue;
-            ChangeLinePart(start, start + m.Length, element => element.TextRunProperties.SetForegroundBrush(accent));
-        }
+        foreach (var (offset, length) in Avamux.Core.Wiki.WikiTags.Spans(text))
+            ChangeLinePart(line.Offset + offset, line.Offset + offset + length, element => element.TextRunProperties.SetForegroundBrush(accent));
     }
 }

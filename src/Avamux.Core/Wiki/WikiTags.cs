@@ -58,6 +58,13 @@ public static class WikiTags
             }
         }
 
+        foreach (var (i, line) in BodyLines(lines, start)) ScanLine(line, i + 1, result);
+        return result;
+    }
+
+    /// <summary>The lines of the body that hold ordinary text (not code), with their index, from <paramref name="start"/> on.</summary>
+    private static IEnumerable<(int Index, string Line)> BodyLines(string[] lines, int start)
+    {
         string? fence = null;      // the fence that opened the code block we are in
         var previousBlank = true;   // indented code needs a blank line (or more code) above it
         var inIndentedCode = false;
@@ -94,9 +101,8 @@ public static class WikiTags
             if (listItem) inList = true;
             else if (indent == 0 && !tabbed && previousBlank) inList = false;
             previousBlank = false;
-            ScanLine(line, i + 1, result);
+            yield return (i, line);
         }
-        return result;
     }
 
     /// <summary>The distinct tags of a page, normalized, in the order they first appear.</summary>
@@ -251,27 +257,34 @@ public static class WikiTags
     /// </summary>
     public static string Linkify(string body)
     {
+        if (body.IndexOf('#') < 0) return body;
         var lines = body.Replace("\r\n", "\n").Split('\n');
-        var spans = Find(body).Where(m => m.Offset >= 0).GroupBy(m => m.Line).ToDictionary(g => g.Key, g => g.ToList());
-        if (spans.Count == 0) return body;
-        var sb = new StringBuilder(body.Length + spans.Count * 40);
-        for (var i = 0; i < lines.Length; i++)
+        // Front matter is not part of a body; a body that starts with "---" lines is scanned from the top like any other.
+        var sb = (StringBuilder?)null;
+        var next = 0;
+        foreach (var (i, line) in BodyLines(lines, 0))
         {
-            if (i > 0) sb.Append('\n');
-            var line = lines[i];
-            if (!spans.TryGetValue(i + 1, out var mentions)) { sb.Append(line); continue; }
+            if (line.IndexOf('#') < 0) continue;
             var at = 0;
-            foreach (var m in mentions)
+            StringBuilder? lineOut = null;
+            foreach (var (offset, length) in Spans(line))
             {
-                // Front matter mentions never reach here: Linkify is given the body only.
-                if (m.Offset < at || m.Offset + m.Length > line.Length || line[m.Offset] != '#') continue;
-                sb.Append(line, at, m.Offset - at);
-                var tag = System.Net.WebUtility.HtmlEncode(Normalize(m.Tag));
-                sb.Append("<a class=\"tag\" href=\"#\" data-tag=\"").Append(tag).Append("\">").Append(System.Net.WebUtility.HtmlEncode(line.Substring(m.Offset, m.Length))).Append("</a>");
-                at = m.Offset + m.Length;
+                lineOut ??= new StringBuilder(line.Length + 64);
+                lineOut.Append(line, at, offset - at);
+                var tag = System.Net.WebUtility.HtmlEncode(Normalize(line.Substring(offset + 1, length - 1)));
+                lineOut.Append("<a class=\"tag\" href=\"#\" data-tag=\"").Append(tag).Append("\">").Append(System.Net.WebUtility.HtmlEncode(line.Substring(offset, length))).Append("</a>");
+                at = offset + length;
             }
-            sb.Append(line, at, line.Length - at);
+            if (lineOut is null) continue;
+            lineOut.Append(line, at, line.Length - at);
+            sb ??= new StringBuilder(body.Length + 256);
+            for (; next < i; next++) sb.Append(lines[next]).Append('\n');
+            sb.Append(lineOut);
+            if (i < lines.Length - 1) sb.Append('\n');
+            next = i + 1;
         }
+        if (sb is null) return body;
+        for (; next < lines.Length; next++) { sb.Append(lines[next]); if (next < lines.Length - 1) sb.Append('\n'); }
         return sb.ToString();
     }
 
