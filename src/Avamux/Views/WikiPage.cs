@@ -149,6 +149,11 @@ public sealed class WikiPage : UserControl, IPage
             redo.IsEnabled = writable && _editor.CanRedo;
         };
         _editor.TextArea.ContextMenu = editMenu;
+        // Plugins (AI Actions …) add their items at the end, asked afresh each time the menu opens.
+        PluginMenus.Attach(editMenu, () => _path is null ? null : new Avamux.Plugins.MenuContext
+        {
+            Menu = Avamux.Plugins.Menus.WikiEditor, WikiPath = _path, SelectedText = _editor.SelectedText, Editor = _editable ? EditorAccess : null,
+        });
         _editor.TextArea.TextView.ScrollOffsetChanged += (_, _) =>
         {
             if (!_loading && _path is not null && _editable) State.RememberWiki(_path, editor: _editor.VerticalOffset, caret: _editor.CaretOffset);
@@ -461,6 +466,11 @@ public sealed class WikiPage : UserControl, IPage
         menu.Items.Add(new Separator());
         menu.Items.Add(Ui.Item("Rename or Move…", () => { _ = RenameAsync(node); }));
         menu.Items.Add(Ui.Item("Delete…", () => { _ = DeleteAsync(node); }));
+        PluginMenus.Attach(menu, () => new Avamux.Plugins.MenuContext
+        {
+            Menu = Avamux.Plugins.Menus.WikiTree, WikiPath = node.Path, IsFolder = node.IsFolder,
+            Editor = !node.IsFolder && node.Path == _path && _editable ? EditorAccess : null,
+        });
         return menu;
     }
 
@@ -661,6 +671,71 @@ public sealed class WikiPage : UserControl, IPage
         catch (Exception ex) { Log.Warn("wiki", "Preview update failed: " + ex.Message); }
     }
 
+    private readonly PluginMenus.WebMenu _previewMenu = new();
+
+    private async Task AddPreviewMenuItemsAsync(string selection)
+    {
+        var items = _previewMenu.Items(new Avamux.Plugins.MenuContext
+        {
+            Menu = Avamux.Plugins.Menus.WikiPreview, WikiPath = _path, SelectedText = selection, Editor = _editable ? EditorAccess : null,
+        });
+        if (items.Count == 0) return;
+        try { await _preview.InvokeScript($"(function(){{ addMenuItems({items.ToJsonString()}); return 'ok'; }})()"); }
+        catch (Exception ex) { Log.Warn("wiki", "Could not add plugin items to the preview's menu: " + ex.Message); }
+    }
+
+    private EditorBridge? _editorAccess;
+    /// <summary>The open page as plugins see it (<see cref="Avamux.Plugins.IWikiEditor"/>).</summary>
+    internal Avamux.Plugins.IWikiEditor EditorAccess => _editorAccess ??= new EditorBridge(this);
+
+    private sealed class EditorBridge(WikiPage page) : Avamux.Plugins.IWikiEditor
+    {
+        private TextEditor Editor => page._editor;
+        public string Path => page._path ?? "";
+        public string Text => Editor.Text;
+        public string SelectedText => Editor.SelectedText;
+        public bool IsReadOnly => !page._editable || Editor.IsReadOnly;
+
+        private void Check()
+        {
+            if (IsReadOnly) throw new InvalidOperationException("This page cannot be edited here.");
+        }
+
+        public void ReplaceSelection(string text)
+        {
+            Check();
+            Editor.TextArea.Selection.ReplaceSelectionWithText(text);
+            Editor.Focus();
+        }
+
+        public void ReplaceText(string text)
+        {
+            Check();
+            var offset = Editor.VerticalOffset;
+            var caret = Math.Min(Editor.CaretOffset, text.Length);
+            var doc = Editor.Document;
+            doc.BeginUpdate();
+            try { doc.Replace(0, doc.TextLength, text); }
+            finally { doc.EndUpdate(); }
+            Editor.CaretOffset = caret;
+            Editor.ScrollToVerticalOffset(offset);
+        }
+
+        public void InsertAfterSelection(string text)
+        {
+            Check();
+            var doc = Editor.Document;
+            var end = Editor.SelectionLength > 0 ? Editor.SelectionStart + Editor.SelectionLength : Editor.CaretOffset;
+            var line = doc.GetLineByOffset(Math.Min(end, doc.TextLength));
+            var insert = "\n" + text.TrimEnd('\n') + (line.NextLine is null ? "\n" : "");
+            doc.Insert(line.EndOffset, insert);
+            Editor.Select(line.EndOffset + 1, text.TrimEnd('\n').Length);
+            Editor.ScrollToLine(line.LineNumber + 1);
+        }
+
+        public void Save() => page.Save();
+    }
+
     private async Task ScrollPreviewToAsync(double fraction)
     {
         await Task.Delay(350); // after the render that Open started
@@ -683,6 +758,11 @@ public sealed class WikiPage : UserControl, IPage
                     if (S("path") is { } p && p == _path && m["y"] is { } y) { _pendingPreviewScroll = y.GetValue<double>(); State.RememberWiki(p, preview: _pendingPreviewScroll); }
                     break;
                 case "file": _ = FileActionAsync(S("a") ?? "", S("path") ?? ""); break;
+                case "menu":
+                    // Right-click in the preview (not on a picture): plugins add their items to its menu.
+                    if (_path is not null) _ = AddPreviewMenuItemsAsync(S("sel") ?? "");
+                    break;
+                case "menuItem": _previewMenu.Pick(S("k")); break;
                 case "tag":
                     if (S("tag") is { Length: > 0 } tag)
                     {

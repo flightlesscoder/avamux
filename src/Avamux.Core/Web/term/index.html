@@ -29,6 +29,14 @@
   #menu div { padding: 6px 12px; border-radius: 4px; cursor: default; display: flex; justify-content: space-between; gap: 24px; }
   #menu div:hover { background: var(--line, #3b4252); }
   #menu span { color: var(--dim, #7b8496); }
+  #menu hr { margin: 4px 0; border: 0; border-top: 1px solid var(--line, #3b4252); }
+  #menu div.off { color: var(--dim, #7b8496); }
+  #menu div.sub { position: relative; padding-right: 26px; }
+  #menu div.sub::after { content: "›"; position: absolute; right: 10px; color: var(--dim, #7b8496); }
+  #menu div.sub > section { display: none; position: absolute; left: 100%; top: -5px; background: var(--panel, #1f2330); border: 1px solid var(--line, #3b4252);
+          border-radius: 6px; padding: 4px; min-width: 170px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+  #menu div.sub:hover > section { display: block; }
+  #menu section div { display: block; }
   /* Heartbeat cursor: drawn by us under the text, in place of xterm's own cursor. */
   .pulse-on .xterm-rows { position: relative; z-index: 1; }
   .term.pulse-on .xterm .xterm-rows .xterm-cursor.xterm-cursor.xterm-cursor.xterm-cursor { background-color: transparent !important; outline: none !important; box-shadow: none !important; }

@@ -455,6 +455,33 @@ A page that wants you (`avamux.needsInput`, `host.RequestAttention`, `avamux pag
 gets a dot on its navigation entry and a notification, unless it is the page you are looking at; the dot goes
 when you open the page. `avamux page badge <page> <text>` shows up to four characters on the entry.
 
+## Plugins
+
+A plugin is a .NET class library that adds to avamux without necessarily adding a page: right-click menu items (with
+submenus) in the wiki editor, the wiki preview, the wiki's folder tree and terminals; watch kinds; AI chat providers;
+a settings panel of its own. Implement `Avamux.Plugins.IAvamuxPlugin` (project `src/Avamux.Plugin.Abstractions`) and
+register what it adds in `Activate(IPluginContext context)`: `AddMenuItems`, `AddWatchProvider`, `AddAiProvider`,
+`AddSettingsView`. Menu items get a `MenuContext` each time a menu opens: which menu, the page or terminal, the selected
+text and, in the wiki, the open page (`IWikiEditor`: read it, replace the selection or the whole page as one undo
+step, insert below). The context also runs avamux commands, asks questions, opens windows and runs AI prompts
+(`context.Ai`). `samples/menu-plugin/` is a complete pageless plugin.
+
+**Settings → Plugins** lists every plugin: the built-in ones (AI Actions), those in the plugins folder (each in a
+folder of its own, or a single DLL as watch plugins were before), and page plugins from Custom pages. It shows what each
+adds, and switches them on and off, reloads them after a rebuild, installs (Install… copies the DLL and what it needs
+into `plugins/<id>/`) and uninstalls them. Switching one off takes what it added away at once; .NET cannot unload an
+assembly, so its code stays in memory until avamux restarts (the list says so). Which plugins are off is kept in
+`plugins.json` in the data folder.
+
+```sh
+dotnet build samples/menu-plugin
+avamux plugin install samples/menu-plugin/bin/Debug/net10.0/SampleMenuPlugin.dll
+avamux plugin list
+avamux plugin disable sample-menu && avamux plugin enable sample-menu
+avamux plugin reload sample-menu      # after copying a new build over plugins/sample-menu/
+avamux plugin uninstall sample-menu
+```
+
 ## Watches are pluggable
 
 Built-in kinds: `github-pr`, `ado-pr`, `ado-pbi`, `ado-pipeline`, `repo-pr`, `command`, `plugin` (`avamux watch kinds`).
@@ -471,5 +498,6 @@ The GitHub and Azure DevOps kinds follow the public REST APIs but have not been 
   Watch settings arrive as `AVAMUX_WATCH_<KEY>` environment variables.
 
 - **.NET plugin**: implement `Avamux.Plugins.IWatchProvider` (project `src/Avamux.Plugin.Abstractions`) and drop
-  the DLL into the plugins folder, or point a `plugin` watch at it with `--set assembly=/path/to.dll`.
+  the DLL into the plugins folder (it is then listed under Settings → Plugins), or point a `plugin` watch at it with
+  `--set assembly=/path/to.dll`. An `IAvamuxPlugin` can add watch kinds too (see [Plugins](#plugins)).
   `samples/watch-plugin/` is a complete example.

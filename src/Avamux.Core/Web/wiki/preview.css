@@ -75,6 +75,12 @@ pre.file .l::before { content: counter(ln); display: inline-block; width: 3.6em;
 #menu div { padding: 6px 12px; border-radius: 4px; cursor: default; white-space: nowrap; }
 #menu div:hover { background: var(--scroll); }
 #menu hr { margin: 4px 0; }
+#menu div.off { color: var(--faint); }
+#menu div.sub { position: relative; padding-right: 26px; }
+#menu div.sub::after { content: "›"; position: absolute; right: 10px; color: var(--dim); }
+#menu div.sub > section { display: none; position: absolute; left: 100%; top: -5px; background: var(--panel); border: 1px solid var(--scroll);
+  border-radius: 6px; padding: 4px; min-width: 180px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+#menu div.sub:hover > section { display: block; }
 
 /* Code blocks: copy button in the top-right corner, shown when the block is hovered or focused. */
 .codewrap { position: relative; margin: 1em 0; }

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A "pageless" plugin: it adds right-click menu items and a watch kind, and nothing to the navigation.
+       Build it (dotnet build), then install it: Settings → Plugins → Install…, choosing
+       bin/Debug/net10.0/SampleMenuPlugin.dll, or `avamux plugin install samples/menu-plugin/bin/Debug/net10.0/SampleMenuPlugin.dll`.
+       After a rebuild, copy it over the installed one and press Reload (or `avamux plugin reload sample-menu`). -->
+  <PropertyGroup>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Provided by avamux at run time, so not copied next to the plugin. -->
+    <ProjectReference Include="..\..\src\Avamux.Plugin.Abstractions\Avamux.Plugin.Abstractions.csproj" Private="false" ExcludeAssets="runtime" />
+  </ItemGroup>
+</Project>

@@ -7,6 +7,8 @@ using Avamux.Core.Events;
 using Avamux.Core.GitActivity;
 using Avamux.Core.Logging;
 using Avamux.Core.Nav;
+using Avamux.Core.Plugins;
+using Avamux.Core.Ai;
 using Avamux.Core.Repos;
 using Avamux.Core.Search;
 using Avamux.Core.SystemInfo;
@@ -51,6 +53,8 @@ public sealed class AppServices : IAsyncDisposable
         Web = new WebServer(this);
         Dashboard = new DashboardService(this);
         Search = new SearchService(this);
+        Plugins = new PluginService(this);
+        Ai = new AiService(this);
         Commands = CommandRegistry.Build(this);
 
         // Theme sounds for the things worth hearing about.
@@ -95,6 +99,10 @@ public sealed class AppServices : IAsyncDisposable
     /// <summary>The `avamux browser` commands; the panes themselves are the UI's.</summary>
     public BrowserService Browser { get; }
     public WebServer Web { get; }
+    /// <summary>Plugins: built-in ones, those in the plugins folder, and page plugins.</summary>
+    public PluginService Plugins { get; }
+    /// <summary>AI chat providers and the conversations with them.</summary>
+    public AiService Ai { get; }
     public DashboardService Dashboard { get; }
     public CommandRegistry Commands { get; }
     public DateTime Started { get; } = DateTime.Now;
@@ -120,6 +128,7 @@ public sealed class AppServices : IAsyncDisposable
         ThemeFiles.Watch();
         Caffeine.Start();
         Logs.Start();
+        Plugins.Start(); // before watches start checking: plugins add watch kinds
         Watches.Start();
         Events.Start();
         Tags.Start();
@@ -130,6 +139,9 @@ public sealed class AppServices : IAsyncDisposable
         // Each step is noted on the timeline, so a slow shutdown shows which part held it up.
         void Step(string name, Action close) { close(); Diagnostics.Timeline.Note("closed: " + name); }
         Step("ui state", Ui.Save);
+        Step("plugins", Plugins.Stop);
+        await Ai.DisposeAsync();
+        Diagnostics.Timeline.Note("closed: ai");
         Step("disk scans", Disks.Dispose);
         Step("git activity", Activity.Dispose);
         Step("watches", Watches.Dispose);

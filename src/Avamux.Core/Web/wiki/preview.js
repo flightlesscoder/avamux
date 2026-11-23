@@ -205,7 +205,7 @@
 
   // ---- right-click menu for pictures ----
 
-  function hideMenu() { menu.style.display = 'none'; }
+  function hideMenu() { menu.style.display = 'none'; menuAt = null; }
   function showMenu(ev, items) {
     menu.innerHTML = '';
     for (const item of items) {
@@ -219,9 +219,48 @@
     menu.style.left = Math.max(4, Math.min(ev.clientX, innerWidth - menu.offsetWidth - 6)) + 'px';
     menu.style.top = Math.max(4, Math.min(ev.clientY, innerHeight - menu.offsetHeight - 6)) + 'px';
   }
+  // Items the app adds to the menu that is open (plugins: AI Actions …): [{k, h, e, t, c: [...]} | {s: 1}].
+  function addItems(container, items, depth) {
+    for (const item of items) {
+      if (item.s) { container.appendChild(document.createElement('hr')); continue; }
+      const d = document.createElement('div');
+      d.textContent = item.h;
+      if (item.t) d.title = item.t;
+      if (item.e === false) d.className = 'off';
+      if (item.c && item.c.length) {
+        d.classList.add('sub');
+        const box = document.createElement('section');
+        addItems(box, item.c, depth + 1);
+        d.appendChild(box);
+      } else if (item.e !== false) {
+        d.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); hideMenu(); post({ t: 'menuItem', k: item.k }); });
+      }
+      container.appendChild(d);
+    }
+  }
+  // Where the last text menu was asked for; the app's items arrive a moment later and open it there if it is not open.
+  let menuAt = null;
+  window.addMenuItems = items => {
+    if (!menuAt || !items || !items.length || Date.now() - menuAt.time > 2000) return;
+    if (menu.style.display !== 'block') { menu.innerHTML = ''; menu.style.display = 'block'; }
+    else menu.appendChild(document.createElement('hr'));
+    addItems(menu, items, 0);
+    menu.style.left = Math.max(4, Math.min(menuAt.x, innerWidth - menu.offsetWidth - 6)) + 'px';
+    menu.style.top = Math.max(4, Math.min(menuAt.y, innerHeight - menu.offsetHeight - 6)) + 'px';
+  };
   document.addEventListener('contextmenu', ev => {
     const img = ev.target.closest('img');
-    if (!img) { hideMenu(); return; }
+    if (!img) {
+      // Text: Copy when something is selected, and whatever the app adds.
+      ev.preventDefault();
+      if (ev.target.closest('#menu')) return;
+      const sel = String(window.getSelection() || '');
+      if (sel) showMenu(ev, [['Copy', () => post({ t: 'copyText', text: sel })]]);
+      else hideMenu();
+      menuAt = { x: ev.clientX, y: ev.clientY, time: Date.now() };
+      post({ t: 'menu', sel });
+      return;
+    }
     ev.preventDefault();
     const path = wikiPath(img.currentSrc || img.src);
     const inViewer = !!img.closest('.stage');

@@ -37,6 +37,7 @@ public partial class App : Application
                 Log.Error("app", $"Unhandled UI exception (report: {file})", e.Exception);
                 e.Handled = true;
             };
+            Services.Plugins.Ui = new Views.AppPluginUi();
             // The web server must be listening before any web view navigates to it.
             Services.StartAsync().GetAwaiter().GetResult();
             Timeline.Note("services started");

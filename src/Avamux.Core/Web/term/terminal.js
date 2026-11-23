@@ -262,6 +262,9 @@
       if (term.modes.mouseTrackingMode !== 'none' && !ev.shiftKey) return;
       ev.preventDefault();
       menuFor = s;
+      for (const x of menu.querySelectorAll('.extra')) x.remove();
+      menuAt = { x: ev.clientX, y: ev.clientY, time: Date.now() };
+      post({ t: 'menu', id: s.id, sel: s.term.getSelection() || '' });
       menu.style.display = 'block';
       menu.style.left = Math.min(ev.clientX, innerWidth - menu.offsetWidth - 4) + 'px';
       menu.style.top = Math.min(ev.clientY, innerHeight - menu.offsetHeight - 4) + 'px';
@@ -270,7 +273,35 @@
     return s;
   }
 
+  // Items the app adds to the open menu (plugins: AI Actions …): [{k, h, e, t, c: [...]} | {s: 1}].
+  let menuAt = null;
+  function addItems(container, items) {
+    for (const item of items) {
+      if (item.s) { const hr = document.createElement('hr'); hr.className = 'extra'; container.appendChild(hr); continue; }
+      const d = document.createElement('div');
+      d.className = 'extra' + (item.e === false ? ' off' : '');
+      d.textContent = item.h;
+      if (item.t) d.title = item.t;
+      if (item.c && item.c.length) {
+        d.classList.add('sub');
+        const box = document.createElement('section');
+        addItems(box, item.c);
+        d.appendChild(box);
+      } else if (item.e !== false) d.dataset.k = item.k;
+      container.appendChild(d);
+    }
+  }
+  window.addMenuItems = items => {
+    if (!menuAt || menu.style.display !== 'block' || !items || !items.length || Date.now() - menuAt.time > 2000) return;
+    const hr = document.createElement('hr'); hr.className = 'extra'; menu.appendChild(hr);
+    addItems(menu, items);
+    menu.style.left = Math.min(menuAt.x, innerWidth - menu.offsetWidth - 4) + 'px';
+    menu.style.top = Math.max(4, Math.min(menuAt.y, innerHeight - menu.offsetHeight - 4)) + 'px';
+  };
   menu.addEventListener('mousedown', ev => {
+    const k = ev.target.closest('div[data-k]');
+    if (k) { ev.preventDefault(); menu.style.display = 'none'; post({ t: 'menuItem', k: k.dataset.k }); return; }
+    if (ev.target.closest('div.sub, div.off')) { ev.preventDefault(); return; }
     const a = ev.target.closest('div[data-a]');
     const s = menuFor && !menuFor.gone ? menuFor : sessions.get(active);
     menu.style.display = 'none';

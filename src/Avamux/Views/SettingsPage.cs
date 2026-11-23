@@ -140,6 +140,7 @@ public sealed class SettingsPage : UserControl, IPage
     private readonly List<(Control Card, List<string> Keys)> _cards = [];
     private readonly List<Control> _filterHidden = [];
     private readonly CustomPagesCard _customPages = new();
+    private readonly PluginsCard _plugins = new();
     private readonly StackPanel _hotkeys = new() { Spacing = 16 };
     private readonly Border _hotkeysCard;
     private string _hotkeyQuery = "";
@@ -203,7 +204,7 @@ public sealed class SettingsPage : UserControl, IPage
                 _cards.Add((card, all.Where(v => v.Path.StartsWith(prefix + ".", StringComparison.Ordinal)).Select(v => v.Path).ToList()));
             }
             // The navigation is part of the window, so the user's own pages come right after its settings.
-            if (prefix == "ui") body.Children.Add(_customPages);
+            if (prefix == "ui") { body.Children.Add(_customPages); body.Children.Add(_plugins); }
         }
         _hotkeysCard = Ui.Card(new StackPanel
         {
@@ -276,12 +277,13 @@ public sealed class SettingsPage : UserControl, IPage
         }
         foreach (var c in _filterHidden) c.IsVisible = hits is null;
         _customPages.IsVisible = hits is null || _customPages.Matches(query);
+        _plugins.IsVisible = hits is null || _plugins.Matches(query);
         _hotkeyQuery = query;
         var hotkeys = BuildHotkeys();
         var counts = new List<string>();
         if (shown > 0) counts.Add($"{shown} setting{(shown == 1 ? "" : "s")}");
         if (hotkeys > 0) counts.Add($"{hotkeys} hotkey{(hotkeys == 1 ? "" : "s")}");
-        _findStatus.Text = hits is null ? "" : counts.Count > 0 ? string.Join(", ", counts) : _customPages.IsVisible ? "" : "Nothing found";
+        _findStatus.Text = hits is null ? "" : counts.Count > 0 ? string.Join(", ", counts) : _customPages.IsVisible || _plugins.IsVisible ? "" : "Nothing found";
         if (hits is not null) _scroll.Offset = default;
     }
 

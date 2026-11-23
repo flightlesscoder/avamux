@@ -427,6 +427,17 @@ public sealed class TerminalsPage : UserControl, IPage
     private Task PushOptionsAsync() =>
         _ready ? Js($"avamux.options({App.Services.Web.TerminalOptions().ToJsonString()})") : Task.CompletedTask;
 
+    private readonly PluginMenus.WebMenu _menu = new();
+
+    /// <summary>A terminal's right-click menu opened: plugins add their items to it.</summary>
+    private async Task AddMenuItemsAsync(string pane, string selection)
+    {
+        var items = _menu.Items(new Avamux.Plugins.MenuContext { Menu = Avamux.Plugins.Menus.Terminal, TerminalId = pane, SelectedText = selection });
+        if (items.Count == 0) return;
+        try { await _web.InvokeScript($"(function(){{ addMenuItems({items.ToJsonString()}); return 'ok'; }})()"); }
+        catch (Exception ex) { Avamux.Core.Logging.Log.Warn("terminal", "Could not add plugin items to the menu: " + ex.Message); }
+    }
+
     private void OnWebMessage(object? sender, WebMessageReceivedEventArgs e)
     {
         try
@@ -436,6 +447,8 @@ public sealed class TerminalsPage : UserControl, IPage
             {
                 case "ready": _ = OnPageReadyAsync(); break;
                 case "press": WebViews.CloseMenus(); break;
+                case "menu" when m["id"]?.GetValue<string>() is { } menuPane: _ = AddMenuItemsAsync(menuPane, m["sel"]?.GetValue<string>() ?? ""); break;
+                case "menuItem": _menu.Pick(m["k"]?.GetValue<string>()); break;
                 case "new": NewTerminal(); break;
                 case "close": if (SelectedPane is { } focus) Manager.Close(focus); break;
                 case "focus" when m["id"]?.GetValue<string>() is { } pane && SelectedId is { } tab && TerminalLayout.TabOf(pane) == tab:
