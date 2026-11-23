@@ -458,6 +458,8 @@ when you open the page. `avamux page badge <page> <text>` shows up to four chara
 
 ## AI Chat
 
+![A permission request waiting in AI Chat](docs/screenshots/ai/05-ai-chat-permission.png)
+
 AI Chat talks to coding agents that bring their own tools; avamux runs their command lines and shows what they do.
 The providers are under **Settings → AI Chat** (kept in `ai-providers.json` in the data folder): Claude Code and pi
 to start with, and any other agent's one-shot command line from a template (presets for Codex, Gemini CLI, opencode
@@ -503,6 +505,11 @@ model and voices files (for example in `~/avamux.local.json`); `ai.tts.voice` pi
 `ai.tts.idleMinutes` (10) without speaking; switching `ai.tts.enabled` off, or quitting, ends it and anything playing.
 
 ## AI Actions
+
+| | |
+|---|---|
+| ![The Tags view beside the editor](docs/screenshots/ai/01-tags-view.png) | ![AI Actions in the preview's right-click menu](docs/screenshots/ai/02-ai-actions-in-the-preview.png) |
+| ![The AI Actions submenu](docs/screenshots/ai/03-ai-actions-menu.png) | ![Add Tags](docs/screenshots/ai/04-add-tags.png) |
 
 AI Actions is a plugin that comes with avamux (switch it off under Settings → Plugins). It adds an **AI Actions**
 submenu to the right-click menus of the wiki's editor, preview and folder tree, and of terminals. Actions that only
