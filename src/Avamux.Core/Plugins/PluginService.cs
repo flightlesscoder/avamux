@@ -50,6 +50,7 @@ public interface IPluginUi
     Task<string?> PromptAsync(string title, string label, string initial);
     Task<bool> ConfirmAsync(string title, string message, string action);
     IPluginWindow ShowWindow(string title, object content, double width, double height);
+    Task SpeakAsync(string text);
 }
 
 public sealed class NullPluginUi : IPluginUi
@@ -61,6 +62,7 @@ public sealed class NullPluginUi : IPluginUi
     public Task<string?> PromptAsync(string title, string label, string initial) => Task.FromResult<string?>(null);
     public Task<bool> ConfirmAsync(string title, string message, string action) => Task.FromResult(false);
     public IPluginWindow ShowWindow(string title, object content, double width, double height) => throw new NotSupportedException("There is no window to show it in.");
+    public Task SpeakAsync(string text) => Task.CompletedTask;
 }
 
 /// <summary>
@@ -558,4 +560,5 @@ internal sealed class PluginContext : IPluginContext
     public Task<string?> PromptAsync(string title, string label, string initial = "") => _owner.Ui.PromptAsync(title, label, initial);
     public Task<bool> ConfirmAsync(string title, string message, string action = "OK") => _owner.Ui.ConfirmAsync(title, message, action);
     public IPluginWindow ShowWindow(string title, object content, double width = 760, double height = 560) => _owner.Ui.ShowWindow(title, content, width, height);
+    public Task SpeakAsync(string text) => _owner.Ui.SpeakAsync(text);
 }

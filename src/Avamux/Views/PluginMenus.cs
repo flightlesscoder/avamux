@@ -114,13 +114,19 @@ public sealed class AppPluginUi : IPluginUi
 
     private static Window Owner => Ui.Main ?? throw new InvalidOperationException("The window is not open yet.");
 
+    /// <summary>The windows plugins have open (tests look into them).</summary>
+    internal static readonly List<Window> Open = [];
+
     public Task<string?> PromptAsync(string title, string label, string initial) => Ui.PromptAsync(Owner, title, label, initial);
     public Task<bool> ConfirmAsync(string title, string message, string action) => Ui.ConfirmAsync(Owner, title, message, action);
+    public Task SpeakAsync(string text) => SpeechUi.ToggleAsync(Owner, text, "plugin:" + text.GetHashCode());
 
     public IPluginWindow ShowWindow(string title, object content, double width, double height)
     {
         var control = content as Control ?? throw new ArgumentException($"A window's content has to be an Avalonia Control, not {content?.GetType().FullName ?? "null"}.");
         var window = new PluginWindow(title, control, width, height);
+        lock (Open) Open.Add(window);
+        window.Closed += (_, _) => { lock (Open) Open.Remove(window); };
         if (Ui.Main is { } main) window.Show(main); else window.Show();
         return window;
     }

@@ -69,6 +69,15 @@ def turn(text):
             assistant([{"type": "text", "text": "written"}]); result(); return
         stream_text("denied: " + resp.get("message", ""))
         assistant([{"type": "text", "text": "denied"}]); result(); return
+    # AI Actions' prompts get answers of the shape they ask for.
+    canned = None
+    if "Suggest tags for this wiki page" in text: canned = "#alpha #beta/gamma #existing"
+    elif "Tidy the formatting of this markdown" in text: canned = "# Title\n\n- one\n- two\n"
+    elif "Summarise" in text: canned = "- point one\n- point two\n\nWhat matters most: the points."
+    elif "Rewrite this markdown as asked" in text: canned = "REWRITTEN"
+    if canned is not None:
+        stream_text(canned)
+        assistant([{"type": "text", "text": canned}], uid="assistant-" + uuid.uuid4().hex[:6]); result(); return
     if "fail" in text:
         result(False, "error_during_execution", "Something broke"); return
     # Thinking, then the text.

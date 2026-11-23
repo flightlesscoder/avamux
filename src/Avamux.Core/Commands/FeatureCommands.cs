@@ -367,6 +367,15 @@ public sealed partial class CommandRegistry
             if (a.Flag("wait")) await s.Tags.Ready;
             return J(s.Tags.Pages(a.Require("tag"), nested: !a.Flag("exact")).Select(h => new { page = h.Page, tag = h.Tag, line = h.Line, text = h.Snippet, modified = h.Modified }));
         });
+        Add("wiki tags add", "Add #tags to a page: into its front matter's tags: when it has one, else onto a \"Tags:\" line at the end. With --text, works on that text and prints the result instead of writing.",
+            [P("page", "Page path."), Rest("tags", "Tags, with or without '#'.", true), O("text", "Markdown to add them to (nothing is written).")], a =>
+        {
+            var tags = (a.Str("tags") ?? "").Split([' ', ','], StringSplitOptions.RemoveEmptyEntries);
+            if (a.Str("text") is { } text) return Wiki.WikiTags.AddTags(text, tags);
+            var page = s.Wiki.FindPage(a.Require("page")) ?? throw new FileNotFoundException($"No wiki page '{a.Str("page")}'.");
+            s.Wiki.Write(page, Wiki.WikiTags.AddTags(s.Wiki.Read(page), tags));
+            return page;
+        });
         Add("wiki import", "Copy a file (such as an image) into the wiki.", [P("file", "File to copy.", true), O("folder", "Destination folder inside the wiki.")], a =>
             s.Wiki.Import(a.Require("file"), a.Str("folder") ?? ""));
     }

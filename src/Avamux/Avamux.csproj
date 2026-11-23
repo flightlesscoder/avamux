@@ -15,6 +15,7 @@
     <PackageReference Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
     <PackageReference Include="Avalonia.Markup.Xaml.Loader" Version="12.1.2" />
     <ProjectReference Include="..\Avamux.Core\Avamux.Core.csproj" />
+    <ProjectReference Include="..\Avamux.Plugins.AiActions\Avamux.Plugins.AiActions.csproj" />
     <AvaloniaResource Include="Assets\**" />
     <InternalsVisibleTo Include="Avamux.UiTests" />
   </ItemGroup>

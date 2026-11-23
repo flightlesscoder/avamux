@@ -38,6 +38,7 @@ public partial class App : Application
                 e.Handled = true;
             };
             Services.Plugins.Ui = new Views.AppPluginUi();
+            Services.Plugins.AddBuiltIn(() => new Avamux.Plugins.AiActions.AiActionsPlugin());
             // The web server must be listening before any web view navigates to it.
             Services.StartAsync().GetAwaiter().GetResult();
             Timeline.Note("services started");

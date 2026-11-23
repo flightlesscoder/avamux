@@ -86,6 +86,20 @@ public sealed partial class CommandRegistry
             return r.Text;
         });
 
+        Add("ai tts status", "Whether Kokoro is on and set up, and its voices.", [], _ => new JsonObject
+        {
+            ["enabled"] = s.Speech.Enabled, ["state"] = s.Speech.State.ToString().ToLowerInvariant(), ["problems"] = new JsonArray(s.Speech.Problems().Select(p => (JsonNode)p).ToArray()),
+            ["voices"] = new JsonArray(s.Speech.Voices.Select(v => (JsonNode)v).ToArray()), ["lastError"] = s.Speech.LastError,
+        });
+        Add("ai tts on", "Switch Kokoro speech on (it starts when something is spoken).", [], _ => { s.Config.Set("ai.tts.enabled", JsonValue.Create(true)); return "on"; });
+        Add("ai tts off", "Switch Kokoro speech off, ending it and anything playing.", [], async _ => { s.Config.Set("ai.tts.enabled", JsonValue.Create(false)); await s.Speech.ShutdownAsync(); return "off"; });
+        Add("ai tts stop", "Stop speaking.", [], _ => { s.Speech.Stop(); return "stopped"; });
+        Add("ai tts say", "Speak text with Kokoro (it must be switched on).", [Rest("text", "What to say.", true)], async a =>
+        {
+            var error = await s.Speech.SpeakAsync(a.Require("text"));
+            if (error is not null) throw new InvalidOperationException(error);
+            return "speaking";
+        });
         Add("ai chat list", "List AI Chat's conversations.", [], _ => new JsonArray(s.Ai.Chats.List().Select(c => (JsonNode)Chat(c, false)).ToArray()));
         Add("ai chat show", "Show a conversation (the branch shown).", [P("chat", "Chat id or title.", true)], a => Chat(s.Ai.Chats.Get(a.Require("chat")), true));
         Add("ai chat new", "Start a conversation in AI Chat (and open it, unless --no-open).",

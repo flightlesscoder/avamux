@@ -502,6 +502,29 @@ model and voices files (for example in `~/avamux.local.json`); `ai.tts.voice` pi
 `ai.tts.autoSpeak` reads every reply as it is written. A small helper keeps the model loaded and unloads it after
 `ai.tts.idleMinutes` (10) without speaking; switching `ai.tts.enabled` off, or quitting, ends it and anything playing.
 
+## AI Actions
+
+AI Actions is a plugin that comes with avamux (switch it off under Settings → Plugins). It adds an **AI Actions**
+submenu to the right-click menus of the wiki's editor, preview and folder tree, and of terminals. Actions that only
+produce text run without tools and change nothing until you say so; their provider, model and effort are
+`ai.actionsProvider` / `ai.actionsModel` / `ai.actionsEffort` (Claude Code, Haiku, low).
+
+| Action | What it does |
+|---|---|
+| Add Tags | Suggests 3 to 7 #tags for the page, preferring tags the wiki already uses. Untick any you do not want and add your own; they go into the page's front matter `tags:` if it has one, else onto a `Tags:` line at the end. One undo step. |
+| Summarize | The selection, or the page, summarised in a window as it is written: Copy, Insert Below, Speak, or **Open in AI Chat** to carry the conversation on. |
+| Format / Rewrite… | Tidies the markdown without changing what it says, or rewrites it as you ask (shorter, friendlier, as a list …). Shows the change line by line first; Accept makes it as one undo step. |
+| Ask About This Page… / Folder…, Do Research… | Opens AI Chat on a conversation set up to answer from the wiki: it searches the pages, reads them, and names the pages it used. Ask it anything; it can also use the `avamux` command line to add what it found to a page or work with terminals, when you ask it to. |
+| Send Selection to a Terminal… | Types the selected text into a terminal. |
+| Explain Selection, Ask in AI Chat…, Copy Selection into a Wiki Page… | In a terminal's menu, for the selected output. |
+
+**Your own actions** are set up under Settings → Plugins → AI Actions: a name, the menus it shows in, a prompt with
+`{{selection}}`, `{{page}}`, `{{pagePath}}`, `{{tags}}`, `{{allTags}}` and `{{input}}` (asked for when it runs), what
+happens to the reply (a window, replace the selection after showing the change, insert below, a new chat, a new page),
+and optionally its own provider, model, effort and whether it may use tools. They are kept in
+`plugin-data/ai-actions/actions.json` in the data folder. `avamux wiki tags add <page> <tags…>` adds tags the same
+way from the command line.
+
 ## Plugins
 
 A plugin is a .NET class library that adds to avamux without necessarily adding a page: right-click menu items (with

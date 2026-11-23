@@ -86,6 +86,9 @@ public interface IPluginContext
     /// <summary>Shows an Avalonia control in a window of avamux's (themed, owned by the main window).</summary>
     IPluginWindow ShowWindow(string title, object content, double width = 760, double height = 560);
 
+    /// <summary>Reads text aloud with Kokoro, asking to switch it on first if it is off (call from the UI thread).</summary>
+    Task SpeakAsync(string text);
+
     /// <summary>avamux's AI providers: run a prompt, or open a conversation in AI Chat.</summary>
     IAiService Ai { get; }
 }
