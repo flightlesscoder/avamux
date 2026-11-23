@@ -10,5 +10,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Avamux.Tests/Avamux.Tests.csproj" />
+    <Project Path="tests/Avamux.UiTests/Avamux.UiTests.csproj" />
   </Folder>
 </Solution>

@@ -8,5 +8,6 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <ProjectReference Include="..\..\src\Avamux.Core\Avamux.Core.csproj" />
     <Using Include="Xunit" />
+    <Compile Include="..\Shared\*.cs" LinkBase="Shared" />
   </ItemGroup>
 </Project>

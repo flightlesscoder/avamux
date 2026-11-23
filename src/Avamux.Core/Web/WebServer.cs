@@ -286,6 +286,7 @@ public sealed class WebServer : IAsyncDisposable
         {
             foreach (var set in _sockets.Values) foreach (var s in set.Keys) s.Abort();
             try { using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(2)); await _web.StopAsync(stop.Token); } catch { }
+            Diagnostics.Timeline.Note("web server stopped");
             await _web.DisposeAsync();
         }
     }

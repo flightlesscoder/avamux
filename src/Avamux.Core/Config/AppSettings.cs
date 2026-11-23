@@ -125,6 +125,10 @@ public sealed class WikiSettings
     public double ClickToPreviewMegabytes { get; set; } = 20;
     /// <summary>Seconds without a change before an edited page is saved.</summary>
     public double AutoSaveSeconds { get; set; } = 2;
+    /// <summary>Show the pictures a page embeds in the editor too, under the line that embeds them, not just in the preview.</summary>
+    public bool EditorPictures { get; set; } = true;
+    /// <summary>Tallest a picture is drawn in the editor, in pixels. Smaller pictures keep their own size.</summary>
+    public double EditorPictureHeight { get; set; } = 220;
 }
 
 public sealed class UiSettings

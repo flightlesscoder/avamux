@@ -65,6 +65,8 @@ public sealed class TerminalSession
         new Thread(ReadLoop) { IsBackground = true, Name = "pty-" + id }.Start();
     }
 
+    private static int _anyOutput;
+
     private void ReadLoop()
     {
         var buf = new byte[64 * 1024];
@@ -76,6 +78,7 @@ public sealed class TerminalSession
                 if (n <= 0) break;
                 var chunk = buf.AsSpan(0, n).ToArray();
                 NoteOutput(DateTime.Now);
+                if (Interlocked.Exchange(ref _anyOutput, 1) == 0) Diagnostics.Timeline.Note("first terminal output", Id);
                 Action<byte[]>[] subs;
                 lock (_gate)
                 {

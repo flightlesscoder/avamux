@@ -168,14 +168,41 @@ public sealed partial class WikiService
     /// <summary>Copies an external file (usually an image) next to a page; returns its wiki path.</summary>
     public string Import(string sourceFile, string folder)
     {
-        var name = System.IO.Path.GetFileName(sourceFile);
-        var dst = Resolve(System.IO.Path.Combine(folder, name));
-        for (var i = 1; File.Exists(dst); i++)
-            dst = Resolve(System.IO.Path.Combine(folder, $"{System.IO.Path.GetFileNameWithoutExtension(name)}-{i}{System.IO.Path.GetExtension(name)}"));
+        var dst = FreePath(folder, System.IO.Path.GetFileName(sourceFile));
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dst)!);
         File.Copy(sourceFile, dst);
         Changed?.Invoke();
         return PathSafety.Relative(Root, dst);
+    }
+
+    /// <summary>
+    /// Full path for a new file in a wiki folder: the name itself if it is free, otherwise "name-N.ext" with N one past
+    /// the highest number already used. The folder is listed once, rather than trying N = 1, 2, 3… one file at a time,
+    /// which cost thousands of checks per file in a folder holding thousands of copies of one name.
+    /// </summary>
+    private string FreePath(string folder, string name)
+    {
+        var dst = Resolve(System.IO.Path.Combine(folder, name));
+        if (!File.Exists(dst)) return dst;
+        var stem = System.IO.Path.GetFileNameWithoutExtension(name);
+        var ext = System.IO.Path.GetExtension(name);
+        var next = 1;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(System.IO.Path.GetDirectoryName(dst)!, stem + "-*" + ext))
+            {
+                var middle = System.IO.Path.GetFileName(file);
+                if (middle.Length <= stem.Length + 1 + ext.Length) continue;
+                middle = middle.Substring(stem.Length + 1, middle.Length - stem.Length - 1 - ext.Length);
+                if (int.TryParse(middle, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) && n >= next) next = n + 1;
+            }
+        }
+        catch (IOException) { }
+        for (; ; next++)
+        {
+            dst = Resolve(System.IO.Path.Combine(folder, $"{stem}-{next}{ext}"));
+            if (!File.Exists(dst)) return dst;
+        }
     }
 
     /// <summary>Writes bytes (a pasted picture, say) into a folder under a name that is not taken yet; returns its wiki path.</summary>
@@ -183,9 +210,7 @@ public sealed partial class WikiService
     {
         name = string.Concat(name.Split(System.IO.Path.GetInvalidFileNameChars())).Trim();
         if (name.Length == 0) name = "file";
-        var dst = Resolve(System.IO.Path.Combine(folder, name));
-        for (var i = 1; File.Exists(dst); i++)
-            dst = Resolve(System.IO.Path.Combine(folder, $"{System.IO.Path.GetFileNameWithoutExtension(name)}-{i}{System.IO.Path.GetExtension(name)}"));
+        var dst = FreePath(folder, name);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dst)!);
         File.WriteAllBytes(dst, data);
         Changed?.Invoke();

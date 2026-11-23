@@ -394,6 +394,7 @@ public sealed class TerminalsPage : UserControl, IPage
             await SyncViewAsync();
             await PushLayoutAsync(force: true);
             Log.Info("terminal", _group is null ? "Terminal view ready" : $"Terminal window {_group} ready");
+            Avamux.Core.Diagnostics.Timeline.Note(_group is null ? "terminal view ready" : "terminal window ready", _group);
             // The page was asked for focus before it existed (app start, a new window); give it now.
             if (IsEffectivelyVisible && _editingId is null) FocusTerminal();
         }
