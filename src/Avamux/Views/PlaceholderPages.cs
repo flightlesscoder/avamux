@@ -5,26 +5,6 @@ using Avalonia.Media;
 
 namespace Avamux.Views;
 
-/// <summary>Placeholder for the AI Chat page. Shown when "AI Chat" is switched on under Settings → AI Workloads.</summary>
-public sealed class ChatPage : UserControl
-{
-    public ChatPage()
-    {
-        Content = new DockPanel
-        {
-            Children =
-            {
-                Ui.Header("AI Chat", "Talk to a model running in one of your workloads.").Dock(Dock.Top),
-                PlaceholderPages.Body(Icons.Forum, "AI Chat is not built yet",
-                    "This page is a placeholder. It will hold conversations with models served by the providers you manage under Workloads.",
-                    ("Conversations", "A list of chats, each tied to a provider and model."),
-                    ("Model picker", "Choose among the models your running providers offer."),
-                    ("Context", "Attach wiki pages, terminal output and repository changes to a message.")),
-            },
-        };
-    }
-}
-
 /// <summary>Placeholder for the Workloads page. Shown when "Workloads" is switched on under Settings → AI Workloads.</summary>
 public sealed class WorkloadsPage : UserControl
 {

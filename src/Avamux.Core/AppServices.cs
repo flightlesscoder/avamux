@@ -55,6 +55,7 @@ public sealed class AppServices : IAsyncDisposable
         Search = new SearchService(this);
         Plugins = new PluginService(this);
         Ai = new AiService(this);
+        Speech = new SpeechService(this);
         Commands = CommandRegistry.Build(this);
 
         // Theme sounds for the things worth hearing about.
@@ -103,6 +104,8 @@ public sealed class AppServices : IAsyncDisposable
     public PluginService Plugins { get; }
     /// <summary>AI chat providers and the conversations with them.</summary>
     public AiService Ai { get; }
+    /// <summary>Speaking replies aloud with Kokoro (off until switched on).</summary>
+    public SpeechService Speech { get; }
     public DashboardService Dashboard { get; }
     public CommandRegistry Commands { get; }
     public DateTime Started { get; } = DateTime.Now;
@@ -140,6 +143,8 @@ public sealed class AppServices : IAsyncDisposable
         void Step(string name, Action close) { close(); Diagnostics.Timeline.Note("closed: " + name); }
         Step("ui state", Ui.Save);
         Step("plugins", Plugins.Stop);
+        await Speech.DisposeAsync();
+        Diagnostics.Timeline.Note("closed: speech");
         await Ai.DisposeAsync();
         Diagnostics.Timeline.Note("closed: ai");
         Step("disk scans", Disks.Dispose);

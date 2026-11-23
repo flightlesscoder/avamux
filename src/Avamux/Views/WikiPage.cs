@@ -82,6 +82,9 @@ public sealed class WikiPage : UserControl, IPage
     private static UiStateStore State => App.Services.Ui;
     private bool Dirty => _path is not null && _editable && _editor.Text != _saved;
 
+    /// <summary>The wiki path of the file open, if any.</summary>
+    public string? CurrentPath => _path;
+
     /// <summary>Raised with the wiki path whenever another file is opened.</summary>
     public event Action<string?>? Opened;
 

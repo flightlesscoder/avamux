@@ -51,6 +51,7 @@ public partial class App : Application
                 window.RequestAnimationFrame(_ => Timeline.NoteOnce("first frame"));
             };
             Services.Host = new AppHost(window, desktop);
+            Services.Ai.ChatHost = new Views.AppChatHost(window);
             desktop.MainWindow = window;
             Avamux.Browser.BrowserHost.Instance.Start();
             Avamux.Core.Terminal.TerminalManager.TabOf = Views.TerminalLayout.TabOf;

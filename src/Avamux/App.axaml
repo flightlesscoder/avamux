@@ -30,6 +30,10 @@
       <Setter Property="FontSize" Value="14" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
+    <Style Selector="TextBlock.h3">
+      <Setter Property="FontSize" Value="13.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
     <Style Selector="TextBlock.dim">
       <Setter Property="Foreground" Value="{DynamicResource Tk.dim}" />
     </Style>

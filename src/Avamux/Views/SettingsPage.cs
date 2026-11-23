@@ -69,7 +69,22 @@ public sealed class SettingsPage : UserControl, IPage
         ["theme.soundOnPullRequest"] = ("Sound: pull request changes", ""),
         ["theme.soundOnAgentWaiting"] = ("Sound: AI agent waits for input", ""),
         ["ai.chat"] = ("AI Chat", "Show the AI Chat page in the navigation."),
-        ["ai.workloads"] = ("Workloads", "Show the Workloads page (providers, work queues, models on disk) in the navigation."),
+        ["ai.workloads"] = ("Workloads", "Show the Workloads page (a placeholder for now: providers, work queues, models on disk) in the navigation."),
+        ["ai.chatProvider"] = ("Provider for new chats", "A provider's id from the list above. Empty: the first one."),
+        ["ai.chatFolder"] = ("Working folder", "The folder agents work in for chats and AI Actions. Empty: the wiki folder."),
+        ["ai.expandThinking"] = ("Show thinking open", "Show the model's thinking (for providers that show it) open instead of folded away."),
+        ["ai.actionsProvider"] = ("AI Actions provider", "The provider AI Actions use unless an action names another (a provider's id)."),
+        ["ai.actionsModel"] = ("AI Actions model", "The model AI Actions use with that provider. Empty: the provider's own."),
+        ["ai.actionsEffort"] = ("AI Actions effort", "The effort AI Actions use with that provider. Empty: the provider's own."),
+        ["ai.tts.enabled"] = ("Speak with Kokoro", "Off by default. When something is to be spoken avamux asks to switch it on. Switching it off ends Kokoro and anything it is playing."),
+        ["ai.tts.python"] = ("Kokoro: Python", "A Python with kokoro_onnx installed, e.g. ~/.venvs/kokoro/bin/python."),
+        ["ai.tts.model"] = ("Kokoro: model file", "kokoro-v1.0.int8.onnx (or kokoro-v1.0.onnx)."),
+        ["ai.tts.voices"] = ("Kokoro: voices file", "voices-v1.0.bin."),
+        ["ai.tts.voice"] = ("Kokoro: voice", "af_nova, af_heart, af_bella, bm_george … (English voices; the Test Voice button lists them once Kokoro is on)."),
+        ["ai.tts.speed"] = ("Kokoro: speed", "1 is normal."),
+        ["ai.tts.volume"] = ("Kokoro: volume", "0 to 1."),
+        ["ai.tts.autoSpeak"] = ("Speak replies as they are written", "Every reply in the chat open is spoken as it comes (Kokoro must be on)."),
+        ["ai.tts.idleMinutes"] = ("Kokoro: unload after", "Minutes without speaking before the model is unloaded. 0 keeps it loaded until switched off."),
         ["watching.enabled"] = ("Watching enabled", "Turn all periodic checks on or off."),
         ["watching.defaultIntervalMinutes"] = ("Minutes between checks", "Used by watches that do not set their own interval."),
         ["watching.timeoutSeconds"] = ("Check timeout (seconds)", "A check that runs longer is stopped and reported as an error."),
@@ -123,7 +138,7 @@ public sealed class SettingsPage : UserControl, IPage
     private static readonly (string Key, string Title)[] Sections =
     [
         ("ui", "Window"), ("theme", "Themes"), ("caffeine", "Caffeine"), ("terminal", "Terminals"), ("browser", "Browser panes"), ("watching", "Watching"), ("events", "Events"), ("wiki", "Wiki"),
-        ("logs", "Logs"), ("dashboard", "Dashboard"), ("repositories", "Repositories"), ("ai", "AI Workloads"),
+        ("logs", "Logs"), ("dashboard", "Dashboard"), ("repositories", "Repositories"), ("ai", "AI Chat"),
     ];
 
     private readonly ComboBox _scope = new() { MinWidth = 250 };
@@ -194,7 +209,13 @@ public sealed class SettingsPage : UserControl, IPage
                 _filterHidden.Add(_themeProblems);
                 rows.Children.Add(_themeTiles);
             }
-            if (prefix == "ai") rows.Children.Add(Ui.Text("AI Chat and Workloads are placeholders for now. Switch them on to show them in the navigation.", "dim", 12.5));
+            if (prefix == "ai")
+            {
+                rows.Children.Add(Ui.Apply(new AiProvidersCard(), c => _filterHidden.Add(c)));
+                rows.Children.Add(Ui.Apply(Ui.Row(8,
+                    Ui.IconButton(Icons.VolumeHigh, "Speak a sentence with the voice set below (asks to switch Kokoro on if it is off)", () => _ = SpeechUi.ToggleAsync(this, "Hello! This is how replies will sound.", "settings-test"), "Test Voice"),
+                    Ui.IconButton(Icons.Stop, "Stop speaking", () => App.Services.Speech.Stop(), "Stop")), c => _filterHidden.Add(c)));
+            }
             foreach (var v in all.Where(v => v.Path.StartsWith(prefix + ".", StringComparison.Ordinal))) rows.Children.Add(_rows[v.Path] = BuildRow(v));
             if (prefix == "theme") rows.Children.Add(Ui.Apply(SoundTests(), c => _filterHidden.Add(c)));
             if (rows.Children.Count > 1)
@@ -241,6 +262,9 @@ public sealed class SettingsPage : UserControl, IPage
     }
 
     public void OnShown() => Refresh();
+
+    /// <summary>Narrows the page to what matches <paramref name="query"/>, as typing it in the search box does.</summary>
+    public void Find(string query) => _find.Text = query;
 
     private Action _filterSoon = () => { };
     private int _filterRun;

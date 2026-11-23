@@ -51,7 +51,8 @@ Linux needs WebKitGTK 4.1 (`libwebkit2gtk-4.1`). macOS uses the system WKWebView
 | Git Activity | Where the work is going across hundreds of repositories: whole GitHub organisations, Azure DevOps organisations or projects, folders of clones, single URLs. Heatmaps you can pivot by anything (repositories, contributors, branches, languages, file types, frameworks, AI tools and models, days, weeks, weekdays, hours), leaderboards with trends, working rhythm, AI use, frameworks and languages, and the commits themselves. See [Git Activity](#git-activity). |
 | C# Interactive | A C# prompt that runs inside the running avamux, next to a screen of live controls built from XAML and from the C# you type. See [C# Interactive](#c-interactive). |
 | Caffeine | Keeps the computer awake until you turn it off, for a while (15 minutes to 8 hours, a length such as `1h30m`, or until a clock time), or while terminals are busy. See [Caffeine](#caffeine). |
-| AI Chat, Workloads | Placeholders, shown when switched on under Settings → AI Workloads. |
+| AI Chat | Conversations with coding agents: Claude Code, pi, and other agent command lines. Several chats, each with its own provider, model, effort and working folder; the model's thinking and tool calls; how full the context is; pictures and files pasted or dropped in; copy, edit (a message, sending it again as a new version, or a reply's text), speak (Kokoro) and insert into the wiki. See [AI Chat](#ai-chat). |
+| Workloads | A placeholder, shown when switched on under Settings → AI Chat. |
 | Your own | Pages you add under Settings → Custom pages: a terminal running one command, a web page, or a .NET plugin. See [Custom pages](#custom-pages). |
 
 ## Themes
@@ -454,6 +455,52 @@ switching them takes effect at once; nothing needs a restart. They are stored in
 A page that wants you (`avamux.needsInput`, `host.RequestAttention`, `avamux page attention <page> <message>`)
 gets a dot on its navigation entry and a notification, unless it is the page you are looking at; the dot goes
 when you open the page. `avamux page badge <page> <text>` shows up to four characters on the entry.
+
+## AI Chat
+
+AI Chat talks to coding agents that bring their own tools; avamux runs their command lines and shows what they do.
+The providers are under **Settings → AI Chat** (kept in `ai-providers.json` in the data folder): Claude Code and pi
+to start with, and any other agent's one-shot command line from a template (presets for Codex, Gemini CLI, opencode
+and aider; best effort, not tested here). Plugins can add kinds of provider (`IAiProvider`).
+
+- **Claude Code** runs as `claude -p` with stream-json both ways, one process per chat, signed in as you already are.
+  Nothing is restricted unless you set it: it asks before editing or running anything, as it does in a terminal,
+  and its permission requests and its questions (AskUserQuestion) show as cards above the message box:
+  Allow, Allow for this chat, or Deny with a reason; a question's options are buttons, with room to type your own.
+  Each provider can be given a permission mode, tools it may or may not use, extra folders, or full access.
+- **pi** runs in RPC mode with any model pi knows. avamux loads a small pi extension of its own that gives the model
+  an `ask_user` tool and, when set to, asks before chosen tools run.
+- **Per chat**: provider, model (a list, or type any name), effort or thinking level, and the folder the agent works
+  in (the wiki by default; `ai.chatFolder`). The ring in the header is how full the context is.
+- **Messages**: thinking is shown while it happens and folded away after ("Thought for 12 s"); each tool call is one
+  line that opens to show its input and output; replies are markdown with selectable text, code blocks with a copy
+  button, tables, and pictures (from markdown, or files the reply names by path) that open full size and can be saved,
+  copied or shown in their folder.
+- **Editing**: edit one of your messages to send it again; the old exchange stays, and ‹ 1/2 › switches between the
+  versions (Claude Code and pi branch their own conversation at that point). Retry writes a reply again the same way.
+  Edit a reply to change its saved text (nothing is sent; it is marked "edited").
+- **Attachments**: paste or drop pictures and files, or use the paperclip. Pictures go to models that take them as
+  pictures; other files are saved with the chat and named by path for the agent to read.
+- Chats are kept in `ai/chats/` in the data folder and carry on after a restart. Enter sends, Shift+Enter is a new
+  line, Esc stops the reply, Ctrl+N starts a new chat.
+
+```sh
+avamux ai providers                         # and: ai kinds, ai models <provider>, ai provider add|set|remove
+avamux ai provider set claude-code --allowed-tools "Read,Grep,Glob"   # limits are off unless set
+avamux ai run "Summarise the README in one line" --provider claude-code --model haiku
+avamux ai chat new "When did we decide on pre-navigation injection?"   # opens it in AI Chat
+avamux ai chat list && avamux ai chat send <chat> "And why?"
+```
+
+### Speaking replies (Kokoro)
+
+The speaker button on a reply reads it aloud with [Kokoro](https://github.com/thewh1teagle/kokoro-onnx), sentence by
+sentence (code blocks are skipped, and so is anything after a line that is only `---`). It is **off by default**:
+the first time something is to be spoken avamux asks whether to switch it on, or says what is missing if it is not set
+up. Point `ai.tts.python` at a Python that has `kokoro_onnx` installed and `ai.tts.model` / `ai.tts.voices` at the
+model and voices files (for example in `~/avamux.local.json`); `ai.tts.voice` picks the voice (`af_nova`), and
+`ai.tts.autoSpeak` reads every reply as it is written. A small helper keeps the model loaded and unloads it after
+`ai.tts.idleMinutes` (10) without speaking; switching `ai.tts.enabled` off, or quitting, ends it and anything playing.
 
 ## Plugins
 
