@@ -4,6 +4,8 @@ body.wide { max-width: none; }
 h1, h2 { border-bottom: 1px solid var(--line); padding-bottom: .25em; }
 h1, h2, h3, h4 { color: var(--textStrong); line-height: 1.25; }
 a { color: var(--link); }
+a.tag { text-decoration: none; padding: 0 .3em; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-size: .92em; }
+a.tag:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 #content img { max-width: 100%; border-radius: var(--radius); cursor: zoom-in; }
 code { background: var(--lineSoft); padding: .1em .35em; border-radius: 4px; font: 13px "JetBrainsMono Nerd Font Mono", "JetBrains Mono", ui-monospace, Menlo, monospace; }
 pre { background: var(--bgEditor); color: var(--textCode); padding: 12px 14px; border-radius: var(--radius); overflow: auto; position: relative; border: 1px solid var(--lineSoft); }

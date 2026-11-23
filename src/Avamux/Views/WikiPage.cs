@@ -57,6 +57,9 @@ public sealed class WikiPage : UserControl, IPage
     private readonly Grid _split = new() { ColumnDefinitions = new ColumnDefinitions("*,*") };
     private readonly Grid _layout = new() { ColumnDefinitions = new ColumnDefinitions("250,*") };
     private readonly Border _editorHost, _previewHost, _treeHost;
+    private readonly WikiTagsPane _tagsPane;
+    private readonly DockPanel _explorer;
+    private readonly Button _explorerTab, _tagsTab;
     private readonly Action _renderSoon;
     private readonly HashSet<string> _collapsed = [];
     private readonly HashSet<string> _opened = [];   // big folders the user opened (they start closed)
@@ -221,7 +224,21 @@ public sealed class WikiPage : UserControl, IPage
             },
         };
 
-        _treeHost = new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 1, 0), Background = Ui.Tk("bgSide"), Child = new DockPanel { Children = { treeBar.Dock(Dock.Top), _tree } } };
+        _explorer = new DockPanel { Children = { treeBar.Dock(Dock.Top), _tree } };
+        _tagsPane = new WikiTagsPane((page, line) => Open(page, line));
+        _explorerTab = PaneTab(Icons.FileTree, "Explorer", "The wiki's folders and files", "explorer");
+        _tagsTab = PaneTab(Icons.Tag, "Tags", "Every #tag in the wiki, and the pages carrying each", "tags");
+        var paneSwitch = new Border
+        {
+            Padding = new Thickness(6, 4, 6, 0), BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 0, 1),
+            Child = Ui.Row(2, _explorerTab, _tagsTab),
+        };
+        _treeHost = new Border
+        {
+            BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 1, 0), Background = Ui.Tk("bgSide"),
+            Child = new DockPanel { Children = { paneSwitch.Dock(Dock.Top), new Panel { Children = { _explorer, _tagsPane } } } },
+        };
+        ShowPane(State.Data.WikiPane);
         _layout.Children.Add(_treeHost);
         _layout.Children.Add(new DockPanel { Children = { editBar.Dock(Dock.Top), _split } }.At(0, 1));
         if (_standalone) { _layout.ColumnDefinitions = new ColumnDefinitions("0,*"); _treeHost.IsVisible = false; }
@@ -246,6 +263,35 @@ public sealed class WikiPage : UserControl, IPage
         BuildTree();
         Open(standalone ?? Wiki.FindPage("Home") ?? Wiki.Pages().FirstOrDefault(WikiService.IsMarkdown));
     }
+
+    private Button PaneTab(Geometry icon, string label, string tip, string pane)
+    {
+        var b = new Button { Classes = { "tab" }, Padding = new Thickness(10, 4), Content = Ui.Row(5, new PathIcon { Data = icon, Width = 12, Height = 12 }, new TextBlock { Text = label, FontSize = 12.5 }) };
+        ToolTip.SetTip(b, tip);
+        b.Click += (_, _) => ShowPane(pane);
+        return b;
+    }
+
+    /// <summary>Shows the folder tree ("explorer") or the Tags view in the left pane, and remembers the choice.</summary>
+    public void ShowPane(string pane)
+    {
+        var tags = pane == "tags";
+        _explorer.IsVisible = !tags;
+        _tagsPane.IsVisible = tags;
+        _explorerTab.Classes.Set("on", !tags);
+        _tagsTab.Classes.Set("on", tags);
+        if (State.Data.WikiPane != (tags ? "tags" : "explorer")) { State.Data.WikiPane = tags ? "tags" : "explorer"; State.SaveSoon(); }
+    }
+
+    /// <summary>Switches the left pane to Tags and lists the pages carrying <paramref name="tag"/>.</summary>
+    public void ShowTag(string tag)
+    {
+        if (_standalone) return;
+        ShowPane("tags");
+        _tagsPane.Show(tag);
+    }
+
+    internal WikiTagsPane TagsPane => _tagsPane;
 
     /// <summary>
     /// A see-through selection in the accent colour: the markdown's own colours stay readable under it (links are
@@ -637,6 +683,13 @@ public sealed class WikiPage : UserControl, IPage
                     if (S("path") is { } p && p == _path && m["y"] is { } y) { _pendingPreviewScroll = y.GetValue<double>(); State.RememberWiki(p, preview: _pendingPreviewScroll); }
                     break;
                 case "file": _ = FileActionAsync(S("a") ?? "", S("path") ?? ""); break;
+                case "tag":
+                    if (S("tag") is { Length: > 0 } tag)
+                    {
+                        if (_standalone) { Ui.Main?.Navigate("wiki"); Ui.Main?.Page<WikiPage>("wiki")?.ShowTag(tag); }
+                        else ShowTag(tag);
+                    }
+                    break;
                 case "page":
                     var target = S("path") ?? "";
                     if (Wiki.FindPage(target) is { } page) Open(page);

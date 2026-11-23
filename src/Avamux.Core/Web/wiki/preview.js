@@ -265,6 +265,7 @@
       if (img && !img.closest('.stage')) openLightbox(img.currentSrc || img.src);
       return;
     }
+    if (a.dataset.tag) { ev.preventDefault(); post({ t: 'tag', tag: a.dataset.tag }); return; }
     const href = a.getAttribute('href'); if (!href) return;
     ev.preventDefault();
     if (href.startsWith('#')) { const t = document.getElementById(decodeURIComponent(href.slice(1))); if (t) t.scrollIntoView(); return; }

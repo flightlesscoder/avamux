@@ -357,6 +357,16 @@ public sealed partial class CommandRegistry
             if (!a.Flag("no-open")) { s.Host.Navigate("wiki"); s.Host.OpenWikiPage(page); }
             return page;
         });
+        Add("wiki tags", "List the #tags used in wiki pages, with how many pages carry each.", [F("wait", "Wait for the first pass over the wiki to finish.")], async a =>
+        {
+            if (a.Flag("wait")) await s.Tags.Ready;
+            return J(s.Tags.Tags().Select(t => new { tag = t.Name, key = t.Key, pages = t.Pages }));
+        });
+        Add("wiki tag", "List the pages carrying a #tag (and tags nested under it, a/b under a).", [P("tag", "The tag, with or without '#'.", true), F("exact", "Leave out nested tags."), F("wait", "Wait for the first pass over the wiki to finish.")], async a =>
+        {
+            if (a.Flag("wait")) await s.Tags.Ready;
+            return J(s.Tags.Pages(a.Require("tag"), nested: !a.Flag("exact")).Select(h => new { page = h.Page, tag = h.Tag, line = h.Line, text = h.Snippet, modified = h.Modified }));
+        });
         Add("wiki import", "Copy a file (such as an image) into the wiki.", [P("file", "File to copy.", true), O("folder", "Destination folder inside the wiki.")], a =>
             s.Wiki.Import(a.Require("file"), a.Str("folder") ?? ""));
     }

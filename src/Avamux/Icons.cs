@@ -94,6 +94,11 @@ public static class Icons
     public static readonly StreamGeometry Harddisk = StreamGeometry.Parse("M6,2H18A2,2 0 0,1 20,4V20A2,2 0 0,1 18,22H6A2,2 0 0,1 4,20V4A2,2 0 0,1 6,2M12,4.5A5.5,5.5 0 0,0 6.5,10A5.5,5.5 0 0,0 12,15.5A5.5,5.5 0 0,0 17.5,10A5.5,5.5 0 0,0 12,4.5M12,8.5A1.5,1.5 0 0,1 13.5,10A1.5,1.5 0 0,1 12,11.5A1.5,1.5 0 0,1 10.5,10A1.5,1.5 0 0,1 12,8.5M7,17.5A1,1 0 0,0 6,18.5A1,1 0 0,0 7,19.5A1,1 0 0,0 8,18.5A1,1 0 0,0 7,17.5Z");
     public static readonly StreamGeometry Pause = StreamGeometry.Parse("M14,19H18V5H14M6,19H10V5H6V19Z");
     public static readonly StreamGeometry Treemap = StreamGeometry.Parse("M3,3H13V13H3V3M15,3H21V9H15V3M15,11H21V21H15V11M3,15H13V21H3V15Z");
+    public static readonly StreamGeometry Tag = StreamGeometry.Parse("M21.41,11.58L12.41,2.58C12.04,2.21 11.53,2 11,2H4C2.9,2 2,2.9 2,4V11C2,11.53 2.21,12.04 2.59,12.41L11.59,21.41C11.96,21.79 12.47,22 13,22C13.53,22 14.04,21.79 14.41,21.41L21.41,14.41C21.79,14.04 22,13.53 22,13C22,12.47 21.79,11.96 21.41,11.58M13,20L4,11V4H11L20,13M6.5,5A1.5,1.5 0 0,1 8,6.5A1.5,1.5 0 0,1 6.5,8A1.5,1.5 0 0,1 5,6.5A1.5,1.5 0 0,1 6.5,5Z");
+    public static readonly StreamGeometry FileTree = StreamGeometry.Parse("M3,3H9V7H3V3M15,10H21V14H15V10M15,17H21V21H15V17M13,13H7V18H13V20H7L5,20V9H7V11H13V13Z");
+    public static readonly StreamGeometry Send = StreamGeometry.Parse("M2,21L23,12L2,3V10L17,12L2,14V21Z");
+    public static readonly StreamGeometry Sparkles = StreamGeometry.Parse("M19,1L17.74,3.75L15,5L17.74,6.26L19,9L20.25,6.26L23,5L20.25,3.75M9,4L6.5,9.5L1,12L6.5,14.5L9,20L11.5,14.5L17,12L11.5,9.5M19,15L17.74,17.74L15,19L17.74,20.25L19,23L20.25,20.25L23,19L20.25,17.74");
+    public static readonly StreamGeometry Download = StreamGeometry.Parse("M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z");
     public static readonly StreamGeometry Coffee = StreamGeometry.Parse("M2,21H20V19H2M20,8H18V5H20M20,3H4V13A4,4 0 0,0 8,17H14A4,4 0 0,0 18,13V10H20A2,2 0 0,0 22,8V5C22,3.89 21.1,3 20,3Z");
 
     /// <summary>Every icon by name, in lower case with dashes: "source-branch", "chart-line".</summary>

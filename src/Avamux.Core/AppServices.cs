@@ -41,6 +41,7 @@ public sealed class AppServices : IAsyncDisposable
         Events = new EventService(Paths, Config);
         Wiki = new WikiService(Paths, () => (long)(Config.Settings.Wiki.ClickToPreviewMegabytes * 1048576));
         Repos = new RepoService(Paths, Config);
+        Tags = new WikiTagIndex(Wiki, Paths);
         Repos.AddBuiltIn(Wiki.Repo);
         Nav = new NavService(Paths);
         Activity = new GitActivityService(Paths);
@@ -83,6 +84,8 @@ public sealed class AppServices : IAsyncDisposable
     public WatchService Watches { get; }
     public EventService Events { get; }
     public WikiService Wiki { get; }
+    /// <summary>Which wiki pages carry which #tags.</summary>
+    public WikiTagIndex Tags { get; }
     public RepoService Repos { get; }
     public NavService Nav { get; }
     /// <summary>Git Activity: commits across whole organisations, read in the background.</summary>
@@ -119,6 +122,7 @@ public sealed class AppServices : IAsyncDisposable
         Logs.Start();
         Watches.Start();
         Events.Start();
+        Tags.Start();
     }
 
     public async ValueTask DisposeAsync()
@@ -132,6 +136,7 @@ public sealed class AppServices : IAsyncDisposable
         Step("events", Events.Dispose);
         Step("caffeine", Caffeine.Dispose);
         Step("terminals", Terminals.Dispose);
+        Step("wiki tags", Tags.Dispose);
         await Web.DisposeAsync();
         Diagnostics.Timeline.Note("closed: web server");
         Step("config", Config.Dispose);
