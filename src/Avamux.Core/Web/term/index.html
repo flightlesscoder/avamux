@@ -10,6 +10,18 @@
   #root { position: absolute; inset: 0; }
   .term { position: absolute; inset: 4px 0 0 6px; visibility: hidden; }
   .term.active { visibility: visible; }
+  /* Split panes: the ones without the keyboard are dimmed, and a divider sits in the gap between them (a hairline
+     that thickens in the accent colour under the pointer and while dragged). */
+  #root.split .term.active:not(.focused) { opacity: .62; }
+  .divider { position: absolute; z-index: 4; display: flex; align-items: center; justify-content: center; touch-action: none; }
+  .divider.col { cursor: col-resize; }
+  .divider.row { cursor: row-resize; flex-direction: column; }
+  .divider::before { content: ""; background: var(--line, #3b4252); }
+  .divider.col::before { width: 1px; height: 100%; }
+  .divider.row::before { height: 1px; width: 100%; }
+  .divider:hover::before, .divider.dragging::before { background: var(--accent, #61afef); }
+  .divider.col:hover::before, .divider.col.dragging::before { width: 3px; }
+  .divider.row:hover::before, .divider.row.dragging::before { height: 3px; }
   #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
            color: #6b7280; font: 14px system-ui, sans-serif; }
   #menu { position: absolute; display: none; z-index: 10; background: var(--panel, #1f2330); border: 1px solid var(--line, #3b4252); border-radius: 6px;

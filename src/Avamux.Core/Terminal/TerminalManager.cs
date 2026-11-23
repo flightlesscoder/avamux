@@ -11,6 +11,12 @@ public sealed record TerminalStartOptions(string? Command = null, IReadOnlyList<
 /// <summary>Owns all terminal sessions.</summary>
 public sealed partial class TerminalManager : IDisposable
 {
+    /// <summary>
+    /// The tab a terminal is shown in: its own id, or (for a pane of a split tab) the tab's. The UI sets this; without
+    /// one every terminal is its own tab.
+    /// </summary>
+    public static Func<string, string> TabOf { get; set; } = t => t;
+
     private readonly AppPaths _paths;
     private readonly ConfigService _config;
     private readonly object _gate = new();

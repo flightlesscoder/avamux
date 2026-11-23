@@ -119,5 +119,27 @@
     <Style Selector="ListBox.rows">
       <Setter Property="Background" Value="{DynamicResource Tk.bgEditor}" />
     </Style>
+    <!-- A splitter between side-by-side panes: a hairline that thickens in the accent colour under the pointer and
+         while dragged, over a wider transparent strip that is easier to catch, with a resize cursor. -->
+    <Style Selector="GridSplitter.divider">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Width" Value="7" />
+      <Setter Property="Cursor" Value="SizeWestEast" />
+      <Setter Property="Template">
+        <ControlTemplate>
+          <Border Background="{TemplateBinding Background}">
+            <Border Name="PART_Line" Width="1" HorizontalAlignment="Center" Background="{DynamicResource Tk.line}" />
+          </Border>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+    <Style Selector="GridSplitter.divider:pointerover /template/ Border#PART_Line">
+      <Setter Property="Width" Value="3" />
+      <Setter Property="Background" Value="{DynamicResource Tk.accent}" />
+    </Style>
+    <Style Selector="GridSplitter.divider:pressed /template/ Border#PART_Line">
+      <Setter Property="Width" Value="3" />
+      <Setter Property="Background" Value="{DynamicResource Tk.accent}" />
+    </Style>
   </Application.Styles>
 </Application>

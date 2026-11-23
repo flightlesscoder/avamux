@@ -79,6 +79,106 @@ internal static class WebKitMac
         catch (Exception ex) { Log.Warn("browser", "Could not release a WKWebView's scripts: " + ex.Message); }
     }
 
+    // ---- snapshots ----
+
+    /// <summary>A rectangle in the web view's coordinates (points; WKWebView is flipped, so y grows downwards).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public record struct CGRect(double X, double Y, double Width, double Height);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (string File, TaskCompletionSource<bool> Done)> Snapshots = new();
+    private static long _nextSnapshot;
+
+    /// <summary>
+    /// Writes a PNG of the web view to <paramref name="file"/>: what it shows, or <paramref name="rect"/> of it (which
+    /// may reach past what is on screen, for the whole document). WebKit paints the snapshot itself, in software, so
+    /// it works whatever covers the window; content drawn by the GPU (WebGL, video) can come out blank.
+    /// </summary>
+    public static async Task SnapshotAsync(IntPtr webView, string file, CGRect? rect)
+    {
+        if (!Supported || webView == IntPtr.Zero) throw new InvalidOperationException("There is no WKWebView to capture.");
+        var id = ++_nextSnapshot;
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Snapshots[id] = (file, done);
+        var block = NewBlock(id);
+        var pool = objc_autoreleasePoolPush();
+        try
+        {
+            var configuration = Send(Send(objc_getClass("WKSnapshotConfiguration"), "alloc"), "init");
+            if (rect is { } r) SendRect(configuration, Sel("setRect:"), r);
+            SendSnapshot(webView, Sel("takeSnapshotWithConfiguration:completionHandler:"), configuration, block);
+            Send(configuration, "release");
+        }
+        catch (Exception ex) { Snapshots.TryRemove(id, out _); done.TrySetException(ex); }
+        finally { objc_autoreleasePoolPop(pool); }
+        try { await done.Task.WaitAsync(TimeSpan.FromSeconds(30)); }
+        finally
+        {
+            Snapshots.TryRemove(id, out _);
+            // WebKit lets go of the block just after calling it; the memory goes a little later, never under its feet.
+            _ = Task.Delay(TimeSpan.FromSeconds(30)).ContinueWith(_ => Marshal.FreeHGlobal(block), TaskScheduler.Default);
+        }
+    }
+
+    /// <summary>Called by WebKit on the main thread with the picture (an NSImage) or an NSError.</summary>
+    private static void OnSnapshot(IntPtr block, IntPtr image, IntPtr error)
+    {
+        var id = Marshal.ReadInt64(block, BlockContextOffset);
+        if (!Snapshots.TryRemove(id, out var job)) return; // timed out meanwhile
+        try
+        {
+            if (image == IntPtr.Zero)
+            {
+                var message = error == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(Send(Send(error, "localizedDescription"), "UTF8String"));
+                job.Done.TrySetException(new InvalidOperationException("The page could not be captured" + (message is null ? "." : ": " + message)));
+                return;
+            }
+            var pool = objc_autoreleasePoolPush();
+            try
+            {
+                // NSImage → TIFF data → bitmap representation → PNG data.
+                var tiff = Send(image, "TIFFRepresentation");
+                var bitmap = tiff == IntPtr.Zero ? IntPtr.Zero : SendObject(objc_getClass("NSBitmapImageRep"), Sel("imageRepWithData:"), tiff);
+                var properties = Send(objc_getClass("NSDictionary"), "dictionary");
+                var png = bitmap == IntPtr.Zero ? IntPtr.Zero : SendRepresentation(bitmap, Sel("representationUsingType:properties:"), 4 /* NSBitmapImageFileTypePNG */, properties);
+                if (png == IntPtr.Zero) throw new InvalidOperationException("The picture could not be turned into a PNG.");
+                var bytes = new byte[(int)SendNUInt(png, Sel("length"))];
+                Marshal.Copy(Send(png, "bytes"), bytes, 0, bytes.Length);
+                File.WriteAllBytes(job.File, bytes);
+                job.Done.TrySetResult(true);
+            }
+            finally { objc_autoreleasePoolPop(pool); }
+        }
+        catch (Exception ex) { job.Done.TrySetException(ex); }
+    }
+
+    // A block for WebKit to call back: a global block (Block_copy and Block_release leave it alone, so it is ours to
+    // free), laid out as the blocks ABI has it, with the snapshot's id where a block keeps what it captured.
+    private const int BlockIsGlobal = 1 << 28;
+    private const int BlockContextOffset = 32; // isa 8, flags 4, reserved 4, invoke 8, descriptor 8
+
+    private delegate void SnapshotCallback(IntPtr block, IntPtr image, IntPtr error);
+    private static readonly SnapshotCallback SnapshotInvoke = OnSnapshot; // kept alive for as long as the app runs
+    private static readonly Lazy<IntPtr> GlobalBlockClass = new(() => NativeLibrary.GetExport(NativeLibrary.Load("/usr/lib/libSystem.B.dylib"), "_NSConcreteGlobalBlock"));
+    private static readonly Lazy<IntPtr> BlockDescriptor = new(() =>
+    {
+        var d = Marshal.AllocHGlobal(16); // reserved, size; never freed (one for the app's life)
+        Marshal.WriteInt64(d, 0, 0);
+        Marshal.WriteInt64(d, 8, BlockContextOffset + 8);
+        return d;
+    });
+
+    private static IntPtr NewBlock(long id)
+    {
+        var b = Marshal.AllocHGlobal(BlockContextOffset + 8);
+        Marshal.WriteIntPtr(b, 0, GlobalBlockClass.Value);
+        Marshal.WriteInt32(b, 8, BlockIsGlobal);
+        Marshal.WriteInt32(b, 12, 0);
+        Marshal.WriteIntPtr(b, 16, Marshal.GetFunctionPointerForDelegate(SnapshotInvoke));
+        Marshal.WriteIntPtr(b, 24, BlockDescriptor.Value);
+        Marshal.WriteInt64(b, BlockContextOffset, id);
+        return b;
+    }
+
     // ---- Objective-C runtime ----
 
     private static readonly Dictionary<string, IntPtr> Selectors = new();
@@ -100,6 +200,10 @@ internal static class WebKitMac
     [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern nuint SendNUInt(IntPtr receiver, IntPtr selector);
     [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern IntPtr SendIndex(IntPtr receiver, IntPtr selector, nuint index);
     [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern IntPtr SendString(IntPtr receiver, IntPtr selector, [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
+    [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern IntPtr SendObject(IntPtr receiver, IntPtr selector, IntPtr arg);
+    [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern void SendRect(IntPtr receiver, IntPtr selector, CGRect rect);
+    [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern void SendSnapshot(IntPtr receiver, IntPtr selector, IntPtr configuration, IntPtr block);
+    [DllImport(Objc, EntryPoint = "objc_msgSend")] private static extern IntPtr SendRepresentation(IntPtr receiver, IntPtr selector, nuint type, IntPtr properties);
     [DllImport(Objc, EntryPoint = "objc_msgSend")]
     private static extern IntPtr SendInitScript(IntPtr receiver, IntPtr selector, IntPtr source, nint injectionTime, [MarshalAs(UnmanagedType.I1)] bool mainFrameOnly);
 }

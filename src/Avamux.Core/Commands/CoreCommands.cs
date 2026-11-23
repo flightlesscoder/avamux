@@ -228,6 +228,18 @@ public sealed partial class CommandRegistry
             if (!a.Flag("background")) s.Host.SelectTerminal(session.Id);
             return J(session.Info());
         });
+        Add("terminal split", "Split a terminal's tab: start a terminal beside it (or below it, with --down) in the same tab, in its folder.",
+            [P("id", "Terminal to split (default: the one this runs in, else the pane with the keyboard in the selected tab)."), F("down", "Below it rather than to its right."),
+             O("name", "Tab name for the new pane."), O("cwd", "Working directory (default: the split terminal's)."), Rest("command", "Command and arguments to run instead of the shell.")], a =>
+        {
+            var pane = a.Str("id") is { Length: > 0 } id ? s.Terminals.Get(id)
+                : (a.Str("callerTerminal") ?? s.Host.SelectedPane) is { } caller && s.Terminals.Find(caller) is { } t ? t
+                : throw new InvalidOperationException("Which terminal? Pass its id.");
+            var cmd = a.List("command");
+            var session = s.Terminals.Create(new TerminalStartOptions(cmd.Count > 0 ? cmd[0] : null, cmd.Skip(1).ToList(), a.Str("cwd") ?? pane.Cwd, a.Str("name")));
+            s.Host.SplitTerminal(pane.Id, session.Id, a.Flag("down"));
+            return J(session.Info());
+        });
         Add("terminal rename", "Rename a tab. An empty name goes back to showing what is running.",
             [P("id", "Terminal id or name.", true), Rest("name", "New name.")], a =>
         {

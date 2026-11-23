@@ -35,6 +35,8 @@ public sealed class BrowserHost : IBrowserSurfaces
     {
         App.Services.Browser.Surfaces = this;
         App.Services.Terminals.Closed += s => Dispatcher.UIThread.Post(() => OnTerminalClosed(s.Id));
+        // Browser panes are docked under a terminal tab; a pane of a split tab uses its tab's dock.
+        TerminalLayout.TabRenamed += OnTabRenamed;
         // A safety net for anything that changes visibility without telling us (window state, a page swap).
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(700), DispatcherPriority.Background, (_, _) => Sync());
         _timer.Start();
@@ -78,6 +80,7 @@ public sealed class BrowserHost : IBrowserSurfaces
 
     public BrowserSurface Create(string url, string? terminal, bool window, bool? keepAlive, string? profile, bool isPrivate)
     {
+        if (terminal is not null) terminal = TerminalLayout.TabOf(terminal);
         var s = new BrowserSurface("b" + _next++, url, terminal, keepAlive ?? App.Services.Config.Settings.Browser.KeepAliveByDefault, profile, isPrivate);
         s.Changed += Ui.Debounced(() => Changed?.Invoke(), 50);
         _surfaces.Add(s);
@@ -120,8 +123,19 @@ public sealed class BrowserHost : IBrowserSurfaces
         RaiseChanged();
     }
 
+    /// <summary>A split tab is known by another of its panes now: its docked panes go with it.</summary>
+    private void OnTabRenamed(string from, string to)
+    {
+        foreach (var s in _surfaces.Where(s => s.Terminal == from)) s.Terminal = to;
+        if (_activeByTerminal.Remove(from, out var active)) _activeByTerminal[to] = active;
+        if (_dockHidden.Remove(from)) _dockHidden.Add(to);
+        RaiseChanged();
+    }
+
     private void OnTerminalClosed(string terminal)
     {
+        // A pane leaving a split tab may hand the tab (and the panes docked under it) to another pane first.
+        TerminalLayout.Forget(terminal);
         // A tab's docked panes go with it; a pane in its own window stays, but no longer belongs to a tab.
         foreach (var s in _surfaces.Where(s => s.Terminal == terminal).ToList())
         {
@@ -178,7 +192,7 @@ public sealed class BrowserHost : IBrowserSurfaces
         }
         else
         {
-            var t = terminal ?? s.Terminal ?? App.Services.Host.SelectedTerminal ?? throw new BrowserException("invalid_params", "Which terminal tab? Pass --terminal.");
+            var t = TerminalLayout.TabOf(terminal ?? s.Terminal ?? App.Services.Host.SelectedTerminal ?? throw new BrowserException("invalid_params", "Which terminal tab? Pass --terminal."));
             if (App.Services.Terminals.Find(t) is null) throw new BrowserException("not_found", $"There is no terminal {t}.");
             if (_windows.Remove(id, out var w)) { Park(s, ParkingFor(null)); w.Detach(); w.Close(); }
             s.Terminal = t;

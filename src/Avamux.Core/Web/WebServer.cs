@@ -102,7 +102,7 @@ public sealed class WebServer : IAsyncDisposable
             ["pulseDouble"] = t.CursorPulseDouble, ["pulseRate"] = Math.Clamp(t.CursorPulseRate, 20, 240), ["pulseGlow"] = Math.Clamp(t.CursorPulseGlow, 0, 100),
             ["background"] = Theming.Rgb.TryParse(t.Background, out var bg) ? bg.Hex : theme["termBg"],
             ["foreground"] = Theming.Rgb.TryParse(t.Foreground, out var fg) ? fg.Hex : theme["termFg"],
-            ["cursor"] = theme["accent"], ["selection"] = theme["termSel"], ["panel"] = theme["panel"], ["line"] = theme["lineStrong"], ["text"] = theme["text"], ["dim"] = theme["dim"],
+            ["cursor"] = theme["accent"], ["selection"] = theme["termSel"], ["panel"] = theme["panel"], ["line"] = theme["lineStrong"], ["text"] = theme["text"], ["dim"] = theme["dim"], ["accent"] = theme["accent"],
             ["ansi"] = new JsonArray(theme.Ansi.Select(c => (JsonNode)c).ToArray()),
         };
     }

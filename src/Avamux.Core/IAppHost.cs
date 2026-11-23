@@ -11,6 +11,10 @@ public interface IAppHost
     void Activate();
     void SelectTerminal(string id);
     string? SelectedTerminal { get; }
+    /// <summary>The terminal with the keyboard in the selected tab: a pane of it when it is split, else the tab's own.</summary>
+    string? SelectedPane { get; }
+    /// <summary>Shows <paramref name="newPane"/> beside (or below) <paramref name="pane"/>, as a pane of the same tab.</summary>
+    void SplitTerminal(string pane, string newPane, bool down);
     void Notify(string title, string message);
     void Quit();
     void ReloadDashboard();
@@ -39,6 +43,8 @@ public class NullAppHost : IAppHost
     public virtual void Activate() { }
     public virtual void SelectTerminal(string id) => SelectedTerminal = id;
     public string? SelectedTerminal { get; protected set; }
+    public string? SelectedPane => SelectedTerminal;
+    public virtual void SplitTerminal(string pane, string newPane, bool down) { }
     public virtual void Notify(string title, string message) { }
     public virtual void Quit() { }
     public virtual void ReloadDashboard() { }
