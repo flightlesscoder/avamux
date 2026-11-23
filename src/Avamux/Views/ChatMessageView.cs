@@ -66,7 +66,7 @@ public sealed partial class ChatMessageView : UserControl
     {
         if (_editing) return;
         var m = _row.Message;
-        var sig = Signature(m) + "|" + App.Services.Speech.SpeakingTag;
+        var sig = Signature(m) + "|" + App.Services.Speech.SpeakingTag + "|" + (m.IsWriting ? Chats.Requests(_row.ChatId).Count : 0);
         if (!force && sig == _row.Shown && Content is not null) return;
         _row.Shown = sig;
         _lastBuild = DateTime.Now;
@@ -179,7 +179,12 @@ public sealed partial class ChatMessageView : UserControl
     private Control Thinking(AiChatMessage m, bool live)
     {
         var label = new TextBlock { Foreground = Ui.Dim, FontSize = 12.5, FontStyle = FontStyle.Italic, VerticalAlignment = VerticalAlignment.Center };
-        if (live)
+        if (live && Chats.Requests(_row.ChatId).Count > 0)
+        {
+            _dots?.Stop();
+            label.Text = "Waiting for your answer below";
+        }
+        else if (live)
         {
             var step = 0;
             label.Text = "Thinking";

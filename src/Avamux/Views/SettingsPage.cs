@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using Avamux.Core;
 using Avamux.Core.Commands;
 using Avamux.Core.Config;
@@ -156,6 +157,7 @@ public sealed class SettingsPage : UserControl, IPage
     private readonly List<Control> _filterHidden = [];
     private readonly CustomPagesCard _customPages = new();
     private readonly PluginsCard _plugins = new();
+    private readonly AiProvidersCard _aiProviders = new();
     private readonly StackPanel _hotkeys = new() { Spacing = 16 };
     private readonly Border _hotkeysCard;
     private string _hotkeyQuery = "";
@@ -211,7 +213,7 @@ public sealed class SettingsPage : UserControl, IPage
             }
             if (prefix == "ai")
             {
-                rows.Children.Add(Ui.Apply(new AiProvidersCard(), c => _filterHidden.Add(c)));
+                rows.Children.Add(_aiProviders);
                 rows.Children.Add(Ui.Apply(Ui.Row(8,
                     Ui.IconButton(Icons.VolumeHigh, "Speak a sentence with the voice set below (asks to switch Kokoro on if it is off)", () => _ = SpeechUi.ToggleAsync(this, "Hello! This is how replies will sound.", "settings-test"), "Test Voice"),
                     Ui.IconButton(Icons.Stop, "Stop speaking", () => App.Services.Speech.Stop(), "Stop")), c => _filterHidden.Add(c)));
@@ -287,6 +289,7 @@ public sealed class SettingsPage : UserControl, IPage
                 if (label.Contains(query, StringComparison.OrdinalIgnoreCase) || help.Contains(query, StringComparison.OrdinalIgnoreCase)) hits.Add(key);
         }
         var shown = 0;
+        var providersMatch = hits is null || _aiProviders.Matches(query);
         foreach (var (card, keys) in _cards)
         {
             var any = false;
@@ -297,17 +300,19 @@ public sealed class SettingsPage : UserControl, IPage
                 row.IsVisible = on;
                 if (on) { any = true; shown++; }
             }
-            card.IsVisible = any;
+            // The AI Chat card also holds the providers list, which matches on its own.
+            card.IsVisible = any || providersMatch && _aiProviders.GetVisualAncestors().Contains(card);
         }
         foreach (var c in _filterHidden) c.IsVisible = hits is null;
         _customPages.IsVisible = hits is null || _customPages.Matches(query);
         _plugins.IsVisible = hits is null || _plugins.Matches(query);
+        _aiProviders.IsVisible = providersMatch;
         _hotkeyQuery = query;
         var hotkeys = BuildHotkeys();
         var counts = new List<string>();
         if (shown > 0) counts.Add($"{shown} setting{(shown == 1 ? "" : "s")}");
         if (hotkeys > 0) counts.Add($"{hotkeys} hotkey{(hotkeys == 1 ? "" : "s")}");
-        _findStatus.Text = hits is null ? "" : counts.Count > 0 ? string.Join(", ", counts) : _customPages.IsVisible || _plugins.IsVisible ? "" : "Nothing found";
+        _findStatus.Text = hits is null ? "" : counts.Count > 0 ? string.Join(", ", counts) : _customPages.IsVisible || _plugins.IsVisible || providersMatch ? "" : "Nothing found";
         if (hits is not null) _scroll.Offset = default;
     }
 

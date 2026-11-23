@@ -70,6 +70,15 @@ public class WikiTagsPaneTests
     }
 
     [AvaloniaFact]
+    public void Opening_on_the_tags_view_shows_tags_indexed_before_the_page_existed()
+    {
+        using var h = new WikiHarness(x => { Fill(x); x.Services.Ui.Data.WikiPane = "tags"; });
+        h.Settle(minMs: 100);
+        var rows = Assert.IsAssignableFrom<IList<WikiTagsPane.TagRow>>(Lists(h)[0].ItemsSource);
+        Assert.Equal(3, rows.Count);
+    }
+
+    [AvaloniaFact]
     public void Filtering_narrows_tags_and_pages()
     {
         using var h = new WikiHarness(Fill);

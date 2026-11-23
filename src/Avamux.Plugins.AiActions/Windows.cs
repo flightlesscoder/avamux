@@ -12,11 +12,13 @@ internal sealed class Look(IPluginContext context)
     public IBrush Brush(string token, double opacity = 1) =>
         Color.TryParse(context.ThemeColor(token), out var c) ? new SolidColorBrush(c, opacity) : Brushes.Gray;
 
-    public TextBlock Text(string text, double size = 13, string? token = null, bool bold = false, bool wrap = true) => new()
+    public TextBlock Text(string text, double size = 13, string? token = null, bool bold = false, bool wrap = true)
     {
-        Text = text, FontSize = size, TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap,
-        Foreground = token is null ? null : Brush(token), FontWeight = bold ? FontWeight.SemiBold : FontWeight.Normal,
-    };
+        var t = new TextBlock { Text = text, FontSize = size, TextWrapping = wrap ? TextWrapping.Wrap : TextWrapping.NoWrap, FontWeight = bold ? FontWeight.SemiBold : FontWeight.Normal };
+        // Only when asked for: a null brush would draw nothing, where no brush inherits the theme's text colour.
+        if (token is not null) t.Foreground = Brush(token);
+        return t;
+    }
 
     public Button Button(string text, Action click, bool accent = false, string? tip = null)
     {

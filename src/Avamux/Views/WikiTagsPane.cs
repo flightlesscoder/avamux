@@ -46,7 +46,7 @@ public sealed class WikiTagsPane : UserControl
                 new TextBlock { Text = row.Count > 0 ? row.Count.ToString("N0") : "", Foreground = Ui.Dim, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center }.Dock(Dock.Right),
                 Ui.Row(5,
                     new PathIcon { Data = Icons.Tag, Width = 11, Height = 11, Foreground = Ui.Tk("accent") },
-                    new TextBlock { Text = row.Label, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis, Foreground = row.Count > 0 ? null : Ui.Dim }),
+                    Ui.Apply(new TextBlock { Text = row.Label, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis }, t => { if (row.Count == 0) t.Foreground = Ui.Dim; })),
             },
         });
         _pages.ItemTemplate = new FuncDataTemplate<TagHit>((hit, _) => hit is null ? new Panel() : PageRow(hit));
@@ -98,6 +98,9 @@ public sealed class WikiTagsPane : UserControl
         Index.Changed += changed;
         DetachedFromVisualTree += (_, _) => Index.Changed -= changed;
         PropertyChanged += (_, e) => { if (e.Property == IsVisibleProperty && IsVisible) Refresh(); };
+        // The index may have been read before this pane existed: show what it has now.
+        AttachedToVisualTree += (_, _) => Refresh();
+        Refresh();
     }
 
     /// <summary>The tag whose pages are listed, or null when the tag list is shown.</summary>
