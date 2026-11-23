@@ -593,6 +593,9 @@ public sealed class BrowserSurface : UserControl, IWebKitEvents
                     if (errors > 0) { _errorsOnPage += errors; UpdateToolbar(); }
                 }
                 break;
+            case "press":
+                WebViews.CloseMenus();
+                break;
             case "key" when m["top"]?.GetValue<bool>() != false:
                 OnPageKey(m["action"]?.GetValue<string>() ?? "");
                 break;
