@@ -224,5 +224,9 @@ public class WikiTagIndexTests
         }
         Assert.Contains("alpha/beta", await Run("wiki", "tags"));
         Assert.Contains("X.md", await Run("wiki", "tag", "alpha", "--exact"));
+        // "wiki tags add" is a command of its own beside "wiki tags".
+        Assert.Contains("X.md", await Run("wiki", "tags", "add", "X", "#gamma", "delta"));
+        Assert.Equal("#alpha #alpha/beta\n\nTags: #gamma #delta\n", app.Wiki.Read("X.md"));
+        Assert.Contains("Tags: #new", await Run("wiki", "tags", "add", "X", "new", "--text", "plain text"));
     }
 }
