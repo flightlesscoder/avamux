@@ -7,6 +7,26 @@ namespace Avamux.Views;
 
 public static class WebViews
 {
+    // ---- menus ----
+
+    private static readonly HashSet<ContextMenu> s_openMenus = [];
+
+    static WebViews()
+    {
+        MenuBase.OpenedEvent.AddClassHandler<ContextMenu>((m, _) => s_openMenus.Add(m));
+        MenuBase.ClosedEvent.AddClassHandler<ContextMenu>((m, _) => s_openMenus.Remove(m));
+    }
+
+    /// <summary>
+    /// Closes the app's open right-click menus. A menu closes by itself when the app's window is clicked, but a click
+    /// into a web view goes to the page's own native view and never reaches the window, so pages say when they are
+    /// pressed (and on Linux the press is seen directly, see <see cref="FocusOnClick"/>).
+    /// </summary>
+    public static void CloseMenus()
+    {
+        foreach (var m in s_openMenus.ToList()) m.Close();
+    }
+
     /// <summary>Common web view environment setup: developer tools on, where the platform supports it.</summary>
     public static void Configure(WebViewEnvironmentRequestedEventArgs e)
     {
@@ -51,7 +71,7 @@ public static class WebViews
     }
 
     /// <summary>
-    /// Gives a web view the keyboard when it is clicked. On Linux the page's X window never takes it by itself (only a
+    /// Gives a web view the keyboard when it is clicked (and closes the app's open menus, see <see cref="CloseMenus"/>). On Linux the page's X window never takes it by itself (only a
     /// click on a text field asks for it), so without this a click into the page, or back into a terminal after using
     /// the page, leaves the keys going wherever they went before.
     /// </summary>
@@ -63,7 +83,7 @@ public static class WebViews
         {
             if (web.TryGetPlatformHandle() is not IGtkWebViewPlatformHandle { WebKitWebView: var v } || v == IntPtr.Zero) return;
             view = v;
-            _ = Browser.WebKitGtk.WatchPressesAsync(v, () => Avalonia.Threading.Dispatcher.UIThread.Post(() => FocusNative(web)));
+            _ = Browser.WebKitGtk.WatchPressesAsync(v, () => Avalonia.Threading.Dispatcher.UIThread.Post(() => { CloseMenus(); FocusNative(web); }));
         };
         web.AdapterDestroyed += (_, _) =>
         {

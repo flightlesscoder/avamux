@@ -213,6 +213,8 @@
     e.preventDefault(); e.stopPropagation();
     post({ k: 'key', action: act });
   }, true);
+  // A press in the page: the app's own menus close (a click into the page never reaches the app's window).
+  window.addEventListener('pointerdown', function () { post({ k: 'press' }); }, true);
   window.addEventListener('mouseup', function (e) {
     if (!isTop) return;
     if (e.button === 3) post({ k: 'key', action: 'back' }); else if (e.button === 4) post({ k: 'key', action: 'forward' });

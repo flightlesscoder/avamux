@@ -284,6 +284,8 @@
     s.term.focus();
   });
   document.addEventListener('mousedown', ev => { if (!menu.contains(ev.target)) menu.style.display = 'none'; });
+  // Any press in the page closes the app's own menus (a tab's right-click menu): the click never reaches its window.
+  document.addEventListener('pointerdown', () => post({ t: 'press' }), true);
 
   function refit(s) {
     try { s.fit.fit(); } catch { }

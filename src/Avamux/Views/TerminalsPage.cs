@@ -434,6 +434,7 @@ public sealed class TerminalsPage : UserControl, IPage
             switch (m["t"]?.GetValue<string>())
             {
                 case "ready": _ = OnPageReadyAsync(); break;
+                case "press": WebViews.CloseMenus(); break;
                 case "new": NewTerminal(); break;
                 case "close": if (SelectedPane is { } focus) Manager.Close(focus); break;
                 case "focus" when m["id"]?.GetValue<string>() is { } pane && SelectedId is { } tab && TerminalLayout.TabOf(pane) == tab:
