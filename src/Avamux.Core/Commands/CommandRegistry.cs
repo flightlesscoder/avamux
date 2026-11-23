@@ -200,6 +200,7 @@ public sealed partial class CommandRegistry
         r.AddSearchCommands(s!);
         r.AddPageCommands(s!);
         r.AddPluginCommands(s!);
+        r.AddAiCommands(s!);
         return r;
     }
 }

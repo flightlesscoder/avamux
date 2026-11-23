@@ -182,9 +182,43 @@ public sealed class ThemeSettings
 public sealed class AiSettings
 {
     /// <summary>Show the AI Chat page in the navigation.</summary>
-    public bool Chat { get; set; }
+    public bool Chat { get; set; } = true;
     /// <summary>Show the Workloads page in the navigation.</summary>
     public bool Workloads { get; set; }
+    /// <summary>The provider new chats start with (an id from Settings → AI Chat). Empty: the first one.</summary>
+    public string ChatProvider { get; set; } = "";
+    /// <summary>The agent's working folder for chats and actions. Empty: the wiki folder.</summary>
+    public string ChatFolder { get; set; } = "";
+    /// <summary>Show the model's thinking (when the provider shows it) open rather than folded away.</summary>
+    public bool ExpandThinking { get; set; }
+    /// <summary>The provider AI Actions use unless an action names another.</summary>
+    public string ActionsProvider { get; set; } = "claude-code";
+    /// <summary>The model AI Actions use with their default provider. Empty: the provider's own.</summary>
+    public string ActionsModel { get; set; } = "haiku";
+    /// <summary>The effort AI Actions use with their default provider. Empty: the provider's own.</summary>
+    public string ActionsEffort { get; set; } = "low";
+    public TtsSettings Tts { get; set; } = new();
+}
+
+/// <summary>Speaking replies aloud with Kokoro, run by a small Python helper. Off until switched on.</summary>
+public sealed class TtsSettings
+{
+    /// <summary>Off by default: nothing is started until it is switched on (avamux asks the first time something is to be spoken).</summary>
+    public bool Enabled { get; set; }
+    /// <summary>The Python that has kokoro_onnx (and onnxruntime) installed, e.g. a project's .venv/bin/python.</summary>
+    public string Python { get; set; } = "";
+    /// <summary>The Kokoro model file (kokoro-v1.0.int8.onnx or kokoro-v1.0.onnx).</summary>
+    public string Model { get; set; } = "";
+    /// <summary>The voices file (voices-v1.0.bin).</summary>
+    public string Voices { get; set; } = "";
+    public string Voice { get; set; } = "af_nova";
+    public double Speed { get; set; } = 1.05;
+    /// <summary>0 to 1.</summary>
+    public double Volume { get; set; } = 0.85;
+    /// <summary>Speak every reply in AI Chat as it is written.</summary>
+    public bool AutoSpeak { get; set; }
+    /// <summary>Unload the model after this many minutes without speaking. 0 keeps it loaded until switched off.</summary>
+    public double IdleMinutes { get; set; } = 10;
 }
 
 public sealed class BrowserSettings

@@ -11,6 +11,7 @@
     <EmbeddedResource Include="Web\**\*" />
     <EmbeddedResource Include="Browser\agent.js" />
     <EmbeddedResource Include="Browser\SKILL.md" />
+    <EmbeddedResource Include="Ai\pi-extension.ts" LogicalName="Avamux.Core.Ai.pi-extension.ts" />
     <InternalsVisibleTo Include="Avamux.Tests" />
   </ItemGroup>
 </Project>

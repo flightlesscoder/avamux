@@ -689,7 +689,9 @@ public class SettingsFeatureTests
         var s = config.Settings;
         Assert.Equal("standard", s.Ui.NavStyle);
         Assert.Equal("simple", s.Theme.Name);
-        Assert.False(s.Ai.Chat);
+        Assert.True(s.Ai.Chat); // AI Chat is a real page now, shown by default
+        Assert.False(s.Ai.Tts.Enabled); // Kokoro is off until asked for
+        Assert.Equal("haiku", s.Ai.ActionsModel);
         Assert.False(s.Ai.Workloads);
         Assert.Equal("yyyy-MM-dd dddd", s.Wiki.DailyNoteFormat);
         Assert.Equal(500, s.Wiki.RememberedPositions);

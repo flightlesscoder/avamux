@@ -83,7 +83,7 @@ public sealed class AiSessionOptions
     public string? Resume { get; init; }
     /// <summary>With <see cref="Resume"/>: continue as a new branch, leaving the original as it was.</summary>
     public bool ForkOnResume { get; init; }
-    /// <summary>With <see cref="Resume"/> and <see cref="ForkOnResume"/>: branch after this message of the provider's (when it can).</summary>
+    /// <summary>With <see cref="Resume"/> and <see cref="ForkOnResume"/>: branch where <see cref="AiTurnStarted.ForkToken"/> of the message being sent again said.</summary>
     public string? ForkAt { get; init; }
     /// <summary>Only text: no tools (for actions whose result avamux applies itself).</summary>
     public bool NoTools { get; init; }
@@ -138,7 +138,11 @@ public sealed class AiAnswer
 public abstract record AiEvent;
 /// <summary>The provider's id for the conversation is known.</summary>
 public sealed record AiSessionStarted(string ProviderSessionId, string? Model) : AiEvent;
-public sealed record AiTurnStarted : AiEvent;
+/// <param name="ForkToken">
+/// Where to branch from to send this message again differently (for <see cref="AiSessionOptions.ForkAt"/>); empty when
+/// it is the first message, null when the provider cannot branch. What it holds is the provider's own business.
+/// </param>
+public sealed record AiTurnStarted(string? ForkToken) : AiEvent;
 /// <summary>Text of the reply, as it streams.</summary>
 public sealed record AiTextDelta(string Text) : AiEvent;
 /// <summary>The model's thinking, for providers that show it.</summary>
