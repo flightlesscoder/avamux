@@ -39,6 +39,8 @@ internal static class Cli
             a["files"] = new JsonArray(files.Select(f => (JsonNode)Path.GetFullPath(f!.GetValue<string>())).ToArray());
         // The terminal tab this runs in, so browser commands act on the pane beside it.
         if (cmd.Group == "browser" && Environment.GetEnvironmentVariable("AVAMUX_TERMINAL_ID") is { Length: > 0 } tab) a["callerTerminal"] = tab;
+        // A split from inside a terminal splits that terminal (its pane), in its folder.
+        if (cmd.Name is "terminal split" && Environment.GetEnvironmentVariable("AVAMUX_TERMINAL_ID") is { Length: > 0 } pane) a["callerTerminal"] = pane;
         if (cmd.Name is "repo add" && a["path"] is JsonValue rp && rp.TryGetValue<string>(out var repoPath) && !repoPath.StartsWith('~'))
             a["path"] = Path.GetFullPath(repoPath);
         if (cmd.Name is "terminal new" && !a.ContainsKey("cwd")) a["cwd"] = Environment.CurrentDirectory;

@@ -37,7 +37,7 @@ public static class Hotkeys
             new("Terminals", "Every other key goes to the program running in the tab.",
             [
                 E("New terminal tab", "Ctrl+Shift+T"),
-                E("Close the current tab", "Ctrl+Shift+W"),
+                E("Close the current tab (in a split tab: the pane you are typing in)", "Ctrl+Shift+W"),
                 E("Previous tab", "Ctrl+PageUp"),
                 E("Next tab", "Ctrl+PageDown"),
                 E("Copy the selection", ["Ctrl+Shift+C", "Ctrl+Insert", .. Cmd("⌘C")]),

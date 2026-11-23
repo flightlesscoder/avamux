@@ -58,7 +58,7 @@ public sealed class AppServices : IAsyncDisposable
         Terminals.AgentWaiting += session =>
         {
             // Nothing to announce when that very tab is already in front of the user.
-            if (Host.CurrentPage == "terminals" && Host.SelectedTerminal == session.Id) return;
+            if (Host.CurrentPage == "terminals" && Host.SelectedTerminal == TerminalManager.TabOf(session.Id)) return;
             Sounds.Play(SoundEvent.AgentWaiting);
             if (Config.Settings.Terminal.NotifyAgentWaiting) Host.Notify($"{session.Agent ?? "Agent"} is waiting for input", session.Title);
         };

@@ -163,8 +163,11 @@ public sealed class BrowserService
         throw new BrowserException("invalid_params", $"{list.Count} browser panes are open and none belongs to this terminal; say which with --surface (see `avamux browser list`).");
     }
 
-    /// <summary>The terminal tab the CLI was run from (AVAMUX_TERMINAL_ID, which the CLI passes along as callerTerminal).</summary>
-    public static string? Caller(Args a) => a.Str("callerTerminal") is { Length: > 0 } t ? t : null;
+    /// <summary>
+    /// The terminal tab the CLI was run from (AVAMUX_TERMINAL_ID, which the CLI passes along as callerTerminal). A
+    /// terminal that is a pane of a split tab answers for that tab, whose dock its browser panes are in.
+    /// </summary>
+    public static string? Caller(Args a) => a.Str("callerTerminal") is { Length: > 0 } t ? Terminal.TerminalManager.TabOf(t) : null;
 
     private void EnsureAllowed()
     {

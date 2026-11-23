@@ -20,7 +20,7 @@ Linux needs WebKitGTK 4.1 (`libwebkit2gtk-4.1`). macOS uses the system WKWebView
 
 | Page | What it does |
 |---|---|
-| Terminals | Tabbed terminals (xterm.js on a real pty). Tabs show what is running, or a name you give them (double-click), and a marker for what the terminal is doing: idle, running, an AI agent working, an AI agent waiting for input, or ended. Tabs can be moved to their own window and back (right-click, or the button at the end of the tab strip). Ctrl+Shift+C / V copy and paste, Ctrl+Shift+T / W new and close tab, Ctrl+PageUp / PageDown switch tabs, Ctrl+Shift+L opens or hides the tab's browser. Every other key combination goes to the program. A browser can sit beside each tab, for you and for the AI agent in it: see [Browser panes](#browser-panes). |
+| Terminals | Tabbed terminals (xterm.js on a real pty). Tabs show what is running, or a name you give them (double-click), and a marker for what the terminal is doing: idle, running, an AI agent working, an AI agent waiting for input, or ended. Tabs can be moved to their own window and back (right-click, or the button at the end of the tab strip). Right-click → Split Right / Split Down starts a terminal beside or below the one you are typing in, in the same folder, as a pane of the same tab; drag the dividers between panes to resize them (double-click one to even it out). Panes without the keyboard are dimmed, the tab shows the pane you last typed in and how many it has, and its menu can even the panes out, move one to a tab of its own or close one. Closing the tab closes all its panes; Ctrl+Shift+W in a pane closes just that pane. `avamux terminal split [id] [--down]` does the same from the command line (run in a terminal, it splits that one). Ctrl+Shift+C / V copy and paste, Ctrl+Shift+T / W new and close tab, Ctrl+PageUp / PageDown switch tabs, Ctrl+Shift+L opens or hides the tab's browser. Every other key combination goes to the program. A browser can sit beside each tab, for you and for the AI agent in it: see [Browser panes](#browser-panes). |
 | Search | One box over wiki pages, events, watches, terminals, repositories, logs and settings. Pick which sources to include; click a result to open it where it lives. |
 | Today | Opens today's daily note in the wiki, creating it if needed. The name comes from `wiki.dailyNoteFormat` (default `yyyy-MM-dd dddd`, e.g. `2026-11-12 Thursday.md`) and `wiki.dailyNoteFolder` (default `Daily`). |
 | Settings | Every setting, which file it comes from, and which file to save changes to. Includes themes, the navigation bar style and the AI Workloads switches, and a Hotkeys list of every key avamux handles, page by page. |
@@ -255,7 +255,8 @@ and your own code, like a plugin.
 ## Browser panes
 
 Each terminal tab can have a browser beside it: the globe button at the end of the tab strip (or Ctrl+Shift+L, in
-the terminal or in the page) opens one, and hides or shows it again. It is a real web view (WebKitGTK on Linux, WKWebView on macOS) with tabs of its
+the terminal or in the page) opens one, and hides or shows it again. Drag the line between the terminal and the browser to
+make either wider; avamux remembers the width. A split tab has one browser, shared by its panes. It is a real web view (WebKitGTK on Linux, WKWebView on macOS) with tabs of its
 own, an address bar (text that is not an address is searched for, `browser.searchUrl`), back, forward, reload, zoom
 (Ctrl+plus/minus/0), the page's own alert/confirm/prompt dialogs shown above it, and the Web Inspector (F12, or the bug
 button, which gets a red dot when the page has thrown errors). The inspector docks inside the pane when the pane is at

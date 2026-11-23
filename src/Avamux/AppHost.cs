@@ -58,6 +58,9 @@ public sealed class AppHost(MainWindow window, IClassicDesktopStyleApplicationLi
         else window.Terminals.Select(id);
     });
     public string? SelectedTerminal => window.Terminals.SelectedId;
+    public string? SelectedPane => SelectedTerminal is { } tab ? Views.TerminalLayout.FocusedPane(tab) : null;
+    public void SplitTerminal(string pane, string newPane, bool down) => Ui(() =>
+        (Views.TerminalLayout.WindowOf(pane)?.Page ?? window.Terminals).AddSplit(pane, newPane, down));
     public void Notify(string title, string message) => Ui(() =>
     {
         window.Toast(title, message);

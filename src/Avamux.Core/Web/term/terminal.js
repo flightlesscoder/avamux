@@ -128,6 +128,7 @@
     r.setProperty('--line', opts.line || '#3b4252');
     r.setProperty('--text', opts.text || '#d8dee9');
     r.setProperty('--dim', opts.dim || '#7b8496');
+    r.setProperty('--accent', opts.accent || opts.cursor || '#61afef');
   }
 
   function post(o) { if (window.invokeCSharpAction) window.invokeCSharpAction(JSON.stringify(o)); }
@@ -241,7 +242,7 @@
     sessions.set(id, s);
     term.onRender(() => pulse(s));
     term.onScroll(() => pulse(s));
-    term.textarea.addEventListener('focus', () => pulse(s));
+    term.textarea.addEventListener('focus', () => { pulse(s); focused(s); });
     term.textarea.addEventListener('blur', () => pulse(s));
     try { fit.fit(); } catch { }
     term.onData(d => {
@@ -260,6 +261,7 @@
       // Programs that enable mouse reporting (tmux, nvim) get the click; otherwise show our menu.
       if (term.modes.mouseTrackingMode !== 'none' && !ev.shiftKey) return;
       ev.preventDefault();
+      menuFor = s;
       menu.style.display = 'block';
       menu.style.left = Math.min(ev.clientX, innerWidth - menu.offsetWidth - 4) + 'px';
       menu.style.top = Math.min(ev.clientY, innerHeight - menu.offsetHeight - 4) + 'px';
@@ -270,7 +272,7 @@
 
   menu.addEventListener('mousedown', ev => {
     const a = ev.target.closest('div[data-a]');
-    const s = sessions.get(active);
+    const s = menuFor && !menuFor.gone ? menuFor : sessions.get(active);
     menu.style.display = 'none';
     if (!a || !s) return;
     ev.preventDefault();
@@ -287,16 +289,108 @@
     try { s.fit.fit(); } catch { }
   }
 
-  function show(id) {
-    id = String(id);
-    const s = open(id);
-    active = id;
-    for (const o of sessions.values()) o.el.classList.toggle('active', o === s);
+  // ---- what is shown: one terminal, or the split panes of a tab ----
+  // A layout is {id} for one terminal, or {dir: 'right'|'down', ratio, a, b}: a split giving `a` (left or top)
+  // `ratio` of the room. Panes are placed in pixels (xterm fits itself to its element), with a divider in the gap
+  // between the two sides of every split. Dragging a divider moves a guide line; the panes are resized (and the
+  // programs in them told their new size) once, on release, rather than on every move.
+  const GAP = 6, MIN = 60;
+  let tree = null;
+  let menuFor = null;
+  const dividers = [];
+
+  function leaves(n) { return n.id != null ? [String(n.id)] : leaves(n.a).concat(leaves(n.b)); }
+
+  function place() {
+    for (const d of dividers) d.remove();
+    dividers.length = 0;
+    if (!tree) return;
+    root.classList.toggle('split', tree.id == null);
+    (function walk(n, x, y, w, h, path) {
+      if (n.id != null) {
+        const s = sessions.get(String(n.id));
+        if (!s) return;
+        // The same margins as a lone terminal has (the .term inset): room on the left and above the text.
+        const st = s.el.style;
+        st.left = (x + 6) + 'px'; st.top = (y + 4) + 'px';
+        st.width = Math.max(0, w - 6) + 'px'; st.height = Math.max(0, h - 4) + 'px';
+        return;
+      }
+      const right = n.dir !== 'down', total = right ? w : h;
+      const at = Math.round(Math.max(MIN, Math.min(total - MIN, total * n.ratio)));
+      const d = document.createElement('div');
+      d.className = 'divider ' + (right ? 'col' : 'row');
+      d.title = 'Drag to resize; double-click to even out';
+      Object.assign(d.style, right
+        ? { left: (x + at - GAP / 2) + 'px', top: y + 'px', width: GAP + 'px', height: h + 'px' }
+        : { left: x + 'px', top: (y + at - GAP / 2) + 'px', width: w + 'px', height: GAP + 'px' });
+      d.addEventListener('pointerdown', ev => drag(ev, d, n, path, right, right ? x : y, total));
+      d.addEventListener('dblclick', () => { n.ratio = 0.5; relayout(); post({ t: 'ratio', path, ratio: 0.5 }); });
+      root.appendChild(d);
+      dividers.push(d);
+      if (right) { walk(n.a, x, y, at - GAP / 2, h, path + 'a'); walk(n.b, x + at + GAP / 2, y, w - at - GAP / 2, h, path + 'b'); }
+      else { walk(n.a, x, y, w, at - GAP / 2, path + 'a'); walk(n.b, x, y + at + GAP / 2, w, h - at - GAP / 2, path + 'b'); }
+    })(tree, 0, 0, root.clientWidth, root.clientHeight, '');
+  }
+
+  function drag(ev, d, n, path, right, start, total) {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    d.setPointerCapture(ev.pointerId);
+    d.classList.add('dragging');
+    let ratio = n.ratio;
+    const move = e => {
+      const r = root.getBoundingClientRect();
+      const at = Math.max(MIN, Math.min(total - MIN, (right ? e.clientX - r.left : e.clientY - r.top) - start));
+      ratio = at / total;
+      d.style[right ? 'left' : 'top'] = (start + at - GAP / 2) + 'px';
+    };
+    const up = () => {
+      d.removeEventListener('pointermove', move);
+      d.removeEventListener('pointerup', up);
+      d.removeEventListener('pointercancel', up);
+      n.ratio = ratio;
+      relayout();
+      post({ t: 'ratio', path, ratio });
+      const s = sessions.get(active);
+      if (s) s.term.focus();
+    };
+    d.addEventListener('pointermove', move);
+    d.addEventListener('pointerup', up);
+    d.addEventListener('pointercancel', up);
+  }
+
+  function shown() { return tree ? leaves(tree).map(id => sessions.get(id)).filter(Boolean) : []; }
+
+  function relayout() {
+    place();
+    for (const s of shown()) { refit(s); pulse(s); }
+  }
+
+  // The pane with the keyboard; the app is told, so its tab shows that pane and its menu acts on it.
+  function focused(s) {
+    for (const o of sessions.values()) o.el.classList.toggle('focused', o === s);
+    if (active === s.id) return;
+    active = s.id;
+    if (tree && tree.id == null) post({ t: 'focus', id: s.id });
+  }
+
+  function layout(t, focus) {
+    tree = t;
+    const ids = leaves(t);
+    for (const id of ids) open(id);
+    const on = new Set(ids);
+    for (const o of sessions.values()) o.el.classList.toggle('active', on.has(o.id));
+    focus = on.has(String(focus)) ? String(focus) : ids[0];
+    active = focus;
+    for (const o of sessions.values()) o.el.classList.toggle('focused', o.id === focus);
     empty.style.display = 'none';
-    refit(s);
-    s.term.focus();
+    relayout();
+    sessions.get(focus).term.focus();
     return true;
   }
+
+  function show(id) { return layout({ id: String(id) }, String(id)); }
 
   function remove(id) {
     const s = sessions.get(String(id));
@@ -329,7 +423,7 @@
   let resizeTimer = null;
   new ResizeObserver(() => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { const s = sessions.get(active); if (s) refit(s); drawCrt(); }, 30);
+    resizeTimer = setTimeout(() => { relayout(); drawCrt(); }, 30);
   }).observe(root);
   if (document.fonts) {
     // Load the symbols font up front; xterm measures and paints as soon as a terminal opens.
@@ -345,7 +439,7 @@
   chrome();
 
   window.avamux = {
-    show, remove, options,
+    show, layout, remove, options,
     open(id) { open(String(id)); return true; },
     focus() { const s = sessions.get(active); if (s) s.term.focus(); return true; },
     text(id, lines) { const s = sessions.get(String(id)); return s ? textOf(s, lines) : null; },
