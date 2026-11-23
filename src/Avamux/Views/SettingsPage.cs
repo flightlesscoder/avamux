@@ -10,6 +10,7 @@ using Avamux.Core;
 using Avamux.Core.Commands;
 using Avamux.Core.Config;
 using Avamux.Core.Theming;
+using Avamux.Plugins;
 
 namespace Avamux.Views;
 
@@ -71,12 +72,12 @@ public sealed class SettingsPage : UserControl, IPage
         ["theme.soundOnAgentWaiting"] = ("Sound: AI agent waits for input", ""),
         ["ai.chat"] = ("AI Chat", "Show the AI Chat page in the navigation."),
         ["ai.workloads"] = ("Workloads", "Show the Workloads page (a placeholder for now: providers, work queues, models on disk) in the navigation."),
-        ["ai.chatProvider"] = ("Provider for new chats", "A provider's id from the list above. Empty: the first one."),
+        ["ai.chatProvider"] = ("Provider for new chats", "Which of the providers above a new chat starts with."),
         ["ai.chatFolder"] = ("Working folder", "The folder agents work in for chats and AI Actions. Empty: the wiki folder."),
         ["ai.expandThinking"] = ("Show thinking open", "Show the model's thinking (for providers that show it) open instead of folded away."),
-        ["ai.actionsProvider"] = ("AI Actions provider", "The provider AI Actions use unless an action names another (a provider's id)."),
-        ["ai.actionsModel"] = ("AI Actions model", "The model AI Actions use with that provider. Empty: the provider's own."),
-        ["ai.actionsEffort"] = ("AI Actions effort", "The effort AI Actions use with that provider. Empty: the provider's own."),
+        ["ai.actionsProvider"] = ("AI Actions provider", "Which of the providers above AI Actions use, unless an action names another. Picking another one sets the model and effort below back to its own when it does not offer them."),
+        ["ai.actionsModel"] = ("AI Actions model", "The model AI Actions use with that provider: pick one, or type its name."),
+        ["ai.actionsEffort"] = ("AI Actions effort", "How hard the model thinks for AI Actions (the levels that provider offers)."),
         ["ai.tts.enabled"] = ("Speak with Kokoro", "Off by default. When something is to be spoken avamux asks to switch it on. Switching it off ends Kokoro and anything it is playing."),
         ["ai.tts.python"] = ("Kokoro: Python", "A Python with kokoro_onnx installed, e.g. ~/.venvs/kokoro/bin/python."),
         ["ai.tts.model"] = ("Kokoro: model file", "kokoro-v1.0.int8.onnx (or kokoro-v1.0.onnx)."),
@@ -259,6 +260,7 @@ public sealed class SettingsPage : UserControl, IPage
         };
         _filterSoon = Ui.Debounced(() => _ = ApplyFilterAsync(), 150);
         Config.Changed += Ui.Debounced(Refresh);
+        App.Services.Ai.Changed += Ui.Debounced(Refresh); // providers added, renamed or removed: the AI dropdowns list them
         Themes.ListChanged += Ui.Debounced(Refresh);
         Refresh();
     }
@@ -469,6 +471,8 @@ public sealed class SettingsPage : UserControl, IPage
             editor = toggle;
             show = v => toggle.IsChecked = v?.GetValueKind() == JsonValueKind.True;
         }
+        else if (key is "ai.chatProvider" or "ai.actionsProvider" or "ai.actionsModel" or "ai.actionsEffort")
+            editor = AiChoice(key, out show);
         else if (Choices.TryGetValue(key, out var options))
         {
             var combo = new ComboBox { MinWidth = 180 };
@@ -587,6 +591,133 @@ public sealed class SettingsPage : UserControl, IPage
             ColumnDefinitions = new ColumnDefinitions("320,*,110,36"),
             Children = { text, editor.At(0, 1), source.At(0, 2), reset.At(0, 3) },
         };
+    }
+
+    /// <summary>
+    /// A dropdown for the AI settings that name a provider, model or effort: the providers set up above by name (the
+    /// setting keeps the provider's id), and the models and effort levels the AI Actions provider offers. A value that
+    /// is not in the list (a provider since removed, a model typed by hand) is kept and shown as it is.
+    /// </summary>
+    private Control AiChoice(string key, out Action<JsonNode?> show)
+    {
+        var ai = App.Services.Ai;
+        var isModel = key == "ai.actionsModel";
+        var combo = new ComboBox { MinWidth = 240, IsEditable = isModel };
+        var shown = "";
+        var filling = false;
+        var generation = 0;
+
+        void Fill(IEnumerable<(string Label, string Value, string? Tip)> items, string current, string missing)
+        {
+            filling = true;
+            try
+            {
+                combo.Items.Clear();
+                foreach (var (label, value, tip) in items)
+                    combo.Items.Add(Ui.Apply(new ComboBoxItem { Content = label, Tag = value }, i => { if (tip is not null) ToolTip.SetTip(i, tip); }));
+                if (combo.Items.OfType<ComboBoxItem>().All(i => (string)i.Tag! != current))
+                    combo.Items.Add(new ComboBoxItem { Content = current + missing, Tag = current });
+                combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().First(i => (string)i.Tag! == current);
+            }
+            finally { filling = false; }
+        }
+
+        // The AI Actions provider as set now (the model and effort lists follow it).
+        AiProviderConfig? ActionsProvider() => ai.DefaultProviderId is { } id ? ai.Config(id) : null;
+
+        void Choose(string value)
+        {
+            if (value == shown) return;
+            if (!Commit(key, value)) return;
+            shown = value;
+            if (key == "ai.actionsProvider") _ = FitModelAndEffortAsync(value);
+        }
+
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (_loading || filling || combo.SelectedItem is not ComboBoxItem { Tag: string v }) return;
+            Choose(v);
+        };
+        if (isModel)
+        {
+            // A typed name is kept as it is; one that matches an item's label means that item.
+            void Typed()
+            {
+                var text = (combo.Text ?? "").Trim();
+                var item = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(i => string.Equals(i.Content as string, text, StringComparison.OrdinalIgnoreCase));
+                Choose(item is { Tag: string v } ? v : text);
+            }
+            combo.LostFocus += (_, _) => Typed();
+            combo.KeyDown += (_, e) => { if (e.Key == Key.Enter) { e.Handled = true; Typed(); } };
+        }
+
+        show = v =>
+        {
+            var current = v is JsonValue jv && jv.TryGetValue<string>(out var str) ? str : "";
+            shown = current;
+            var configs = ai.Configs;
+            switch (key)
+            {
+                case "ai.chatProvider" or "ai.actionsProvider":
+                    Fill([("The first one in the list", "", "Whichever provider is first above (and switched on)"),
+                          .. configs.Select(c => (ProviderLabel(c, configs), c.Id, (string?)$"{ai.Kind(c.Kind)?.DisplayName ?? c.Kind} · id {c.Id}"))],
+                        current, "  (not set up)");
+                    break;
+                case "ai.actionsEffort":
+                {
+                    var p = ActionsProvider();
+                    var levels = p is null ? [] : ai.Kind(p.Kind)?.Capabilities.EffortLevels ?? [];
+                    Fill([("The provider's own", "", null), .. levels.Select(l => (l, l, (string?)null))], current, levels.Count == 0 ? "" : "  (not offered)");
+                    combo.IsEnabled = levels.Count > 0 || current.Length > 0;
+                    break;
+                }
+                default:
+                {
+                    var p = ActionsProvider();
+                    var run = ++generation;
+                    Fill([("The provider's own", "", null)], current, "");
+                    if (p is null) break;
+                    _ = Load();
+                    async Task Load()
+                    {
+                        var models = await ai.ModelsAsync(p.Id);
+                        if (run != generation || models.Count == 0) return;
+                        var items = models.Select(m => (m.Id.Length == 0 ? "The provider's own" : m.Name, m.Id, m.Note)).ToList();
+                        if (items.All(i => i.Id != "")) items.Insert(0, ("The provider's own", "", null));
+                        Fill(items, shown, "");
+                    }
+                    break;
+                }
+            }
+        };
+        return combo;
+    }
+
+    /// <summary>A provider's name in a list, with its kind when another provider has the same name, and whether it is off.</summary>
+    private static string ProviderLabel(AiProviderConfig c, IReadOnlyList<AiProviderConfig> all)
+    {
+        var kind = App.Services.Ai.Kind(c.Kind)?.DisplayName;
+        var label = c.Name;
+        if (kind is not null && all.Count(o => string.Equals(o.Name, c.Name, StringComparison.OrdinalIgnoreCase)) > 1) label += " · " + kind;
+        return c.Enabled ? label : label + "  (switched off)";
+    }
+
+    /// <summary>
+    /// After the AI Actions provider changes: a model or effort the new provider does not offer would make every action
+    /// fail, so those go back to the provider's own.
+    /// </summary>
+    private async Task FitModelAndEffortAsync(string providerId)
+    {
+        var ai = App.Services.Ai;
+        var settings = Config.Settings.Ai;
+        if ((providerId.Length > 0 ? ai.Config(providerId) : ai.DefaultProviderId is { } d ? ai.Config(d) : null) is not { } p) return;
+        var levels = ai.Kind(p.Kind)?.Capabilities.EffortLevels ?? [];
+        var model = settings.ActionsModel;
+        var effort = settings.ActionsEffort;
+        var reset = new List<string>();
+        if (effort.Length > 0 && !levels.Contains(effort)) { Commit("ai.actionsEffort", ""); reset.Add("effort"); }
+        if (model.Length > 0 && (await ai.ModelsAsync(p.Id)).All(m => m.Id != model)) { Commit("ai.actionsModel", ""); reset.Add("model"); }
+        if (reset.Count > 0) Ui.Toast(this, "AI Actions", $"{p.Name} does not offer {string.Join(" or ", reset.Select(r => r == "model" ? "the model " + model : "the effort " + effort))}, so it uses its own.");
     }
 
     private bool Commit(string key, string text)

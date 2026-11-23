@@ -124,6 +124,7 @@ public sealed class AiService : IAiService, IAsyncDisposable
             }
             var i = _state.Providers.FindIndex(p => p.Id == config.Id);
             if (i >= 0) _state.Providers[i] = config.Clone(); else _state.Providers.Add(config.Clone());
+            _models.Remove(config.Id);
             Save();
         }
         Changed?.Invoke();
@@ -133,8 +134,30 @@ public sealed class AiService : IAiService, IAsyncDisposable
     public void Remove(string idOrName)
     {
         var c = GetConfig(idOrName);
-        lock (_gate) { _state.Providers.RemoveAll(p => p.Id == c.Id); Save(); }
+        lock (_gate) { _state.Providers.RemoveAll(p => p.Id == c.Id); _models.Remove(c.Id); Save(); }
         Changed?.Invoke();
+    }
+
+    private readonly Dictionary<string, Task<IReadOnlyList<AiModel>>> _models = [];
+
+    /// <summary>
+    /// The models a configured provider offers, asked of its kind once and remembered until the provider is changed
+    /// (pi runs <c>pi --list-models</c>, so the chat header and Settings share one answer). Empty when it is not set up.
+    /// </summary>
+    public async Task<IReadOnlyList<AiModel>> ModelsAsync(string idOrName)
+    {
+        if (Config(idOrName) is not { } config || Kind(config.Kind) is not { } kind) return [];
+        Task<IReadOnlyList<AiModel>> task;
+        lock (_gate)
+            if (!_models.TryGetValue(config.Id, out task!))
+                _models[config.Id] = task = kind.ListModelsAsync(config);
+        try { return await task; }
+        catch (Exception ex)
+        {
+            lock (_gate) if (_models.TryGetValue(config.Id, out var t) && t == task) _models.Remove(config.Id);
+            Log.Warn("ai", $"Could not list the models of {config.Name}: {ex.Message}");
+            return [];
+        }
     }
 
     // ---- IAiService ----

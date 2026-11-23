@@ -348,7 +348,7 @@ public sealed class ChatPage : UserControl, IPage
             _model.Items.Clear();
             _model.Items.Add(new ComboBoxItem { Content = model.Length > 0 ? model : "Default model", Tag = model });
             _model.SelectedIndex = 0;
-            if (config is not null && kind is not null) _ = LoadModelsAsync(config, kind, model);
+            if (config is not null && kind is not null) _ = LoadModelsAsync(config, model);
             var folder = chat?.Folder ?? Ai.DefaultFolder;
             ((TextBlock)((StackPanel)_folder.Content!).Children.OfType<TextBlock>().FirstOrDefault()!)?.SetValue(TextBlock.TextProperty, System.IO.Path.GetFileName(folder.TrimEnd('/')));
             ToolTip.SetTip(_folder, "Works in " + folder + " (click to change)");
@@ -356,15 +356,9 @@ public sealed class ChatPage : UserControl, IPage
         finally { _loadingHeader = false; }
     }
 
-    private static readonly Dictionary<string, IReadOnlyList<AiModel>> ModelCache = [];
-
-    private async Task LoadModelsAsync(AiProviderConfig config, IAiProvider kind, string current)
+    private async Task LoadModelsAsync(AiProviderConfig config, string current)
     {
-        if (!ModelCache.TryGetValue(config.Id, out var models))
-        {
-            models = await kind.ListModelsAsync(config);
-            ModelCache[config.Id] = models;
-        }
+        var models = await Ai.ModelsAsync(config.Id);
         if (Current?.ProviderId is { } shown && shown != config.Id) return;
         _loadingHeader = true;
         try

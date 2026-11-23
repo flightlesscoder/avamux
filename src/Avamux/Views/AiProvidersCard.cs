@@ -65,7 +65,8 @@ public sealed class AiProvidersCard : UserControl
             var id = c.Id;
             on.IsCheckedChanged += (_, _) => Ui.Try(this, () => { var x = Ai.GetConfig(id); x.Enabled = on.IsChecked == true; Ai.Put(x); });
             var title = Ui.Row(8, new TextBlock { Text = c.Name, FontWeight = FontWeight.SemiBold }, Ui.Chip(kind?.DisplayName ?? c.Kind + " (missing)", Ui.Tk(kind is null ? "error" : "purple")));
-            var detail = $"{(c.Command.Length > 0 ? c.Command : kind?.Kind switch { ClaudeCodeProvider.KindId => "claude", PiProvider.KindId => "pi", _ => "" })}" +
+            // The id is what the command line takes (avamux ai run --provider <id>).
+            var detail = $"id {c.Id} · {(c.Command.Length > 0 ? c.Command : kind?.Kind switch { ClaudeCodeProvider.KindId => "claude", PiProvider.KindId => "pi", _ => "" })}" +
                          $"{(c.Model.Length > 0 ? " · model " + c.Model : "")}{(c.Effort.Length > 0 ? " · effort " + c.Effort : "")}";
             var text = Ui.Column(2, title,
                 new TextBlock { Text = detail, Foreground = Ui.Dim, FontSize = 11.5, FontFamily = Ui.Mono, TextTrimming = TextTrimming.CharacterEllipsis },
