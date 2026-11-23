@@ -123,15 +123,18 @@ public sealed class AppServices : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        Ui.Save();
-        Disks.Dispose();
-        Activity.Dispose();
-        Watches.Dispose();
-        Events.Dispose();
-        Caffeine.Dispose();
-        Terminals.Dispose();
+        // Each step is noted on the timeline, so a slow shutdown shows which part held it up.
+        void Step(string name, Action close) { close(); Diagnostics.Timeline.Note("closed: " + name); }
+        Step("ui state", Ui.Save);
+        Step("disk scans", Disks.Dispose);
+        Step("git activity", Activity.Dispose);
+        Step("watches", Watches.Dispose);
+        Step("events", Events.Dispose);
+        Step("caffeine", Caffeine.Dispose);
+        Step("terminals", Terminals.Dispose);
         await Web.DisposeAsync();
-        Config.Dispose();
-        ThemeFiles.Dispose();
+        Diagnostics.Timeline.Note("closed: web server");
+        Step("config", Config.Dispose);
+        Step("themes", ThemeFiles.Dispose);
     }
 }

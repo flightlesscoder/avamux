@@ -50,6 +50,7 @@ public sealed class WikiPage : UserControl, IPage
         Padding = new Thickness(14, 10), HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
     };
     private readonly MarkdownColorizer _colorizer = new();
+    private readonly EditorPictures _pictures;
     private readonly DispatcherTimer _autoSave = new();
     private readonly NativeWebView _preview = new();
     private readonly TextBlock _title = new() { FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
@@ -58,6 +59,7 @@ public sealed class WikiPage : UserControl, IPage
     private readonly Border _editorHost, _previewHost, _treeHost;
     private readonly Action _renderSoon;
     private readonly HashSet<string> _collapsed = [];
+    private readonly HashSet<string> _opened = [];   // big folders the user opened (they start closed)
     private readonly bool _standalone;
     private readonly Button[] _modeButtons;
     private readonly WikiGitMenu _git;
@@ -86,11 +88,20 @@ public sealed class WikiPage : UserControl, IPage
         _standalone = standalone is not null;
         _editor.Background = Ui.Tk("bgEditor");
         _editor.Foreground = Ui.Tk("textCode");
+        TintSelection(_editor);
         _editor.Options.EnableHyperlinks = false;
         _editor.Options.EnableEmailHyperlinks = false;
         _editor.Options.HighlightCurrentLine = false;
         _editor.Options.ConvertTabsToSpaces = true;
         _editor.TextArea.TextView.LineTransformers.Add(_colorizer);
+        _pictures = new EditorPictures(_editor,
+            folder: () => _path is { } open && WikiService.IsMarkdown(open) ? FolderOf(open) : null,
+            fullPath: p => { try { return Wiki.Resolve(p); } catch { return null; } },
+            options: () =>
+            {
+                var w = App.Services.Config.Settings.Wiki;
+                return new EditorPictureOptions(w.EditorPictures, Math.Clamp(w.EditorPictureHeight, 40, 2000), (long)(Math.Max(0, w.ClickToPreviewMegabytes) * 1024 * 1024));
+            });
         _editorHost = new Border { Child = _editor, BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 1, 0) };
         _previewHost = new Border { Child = _preview };
         _split.Children.Add(_editorHost);
@@ -155,8 +166,10 @@ public sealed class WikiPage : UserControl, IPage
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         // Files dropped anywhere on the page are copied next to it and linked, like a paste.
         DragDrop.SetAllowDrop(this, true);
-        AddHandler(DragDrop.DragOverEvent, OnDragOver, Avalonia.Interactivity.RoutingStrategies.Tunnel);
-        AddHandler(DragDrop.DropEvent, OnDrop, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        // Drag and drop events only bubble (a tunnel handler never runs), and the editor under the pointer may have
+        // handled them already as a text drop: listen to handled ones too.
+        AddHandler(DragDrop.DragOverEvent, OnDragOver, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(DragDrop.DropEvent, OnDrop, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
         _tree.SelectionChanged += (_, _) =>
         {
             if (_buildingTree || (_tree.SelectedItem as TreeViewItem)?.Tag is not WikiNode node) return;
@@ -214,20 +227,35 @@ public sealed class WikiPage : UserControl, IPage
         if (_standalone) { _layout.ColumnDefinitions = new ColumnDefinitions("0,*"); _treeHost.IsVisible = false; }
         Content = _layout;
 
-        var changed = Ui.Debounced(() => { OnWikiChanged(); _ = _git.RefreshAsync(); }, 150);
+        var changed = Ui.Debounced(() => { OnWikiChanged(); _pictures.Refresh(); _ = _git.RefreshAsync(); }, 150);
         // Git moved files underneath the wiki (a branch switch, a revert, a restored version): show what is there now.
-        var gitChanged = Ui.Debounced(() => { OnWikiChanged(fromGit: true); _ = _git.RefreshAsync(); }, 150);
+        var gitChanged = Ui.Debounced(() => { OnWikiChanged(fromGit: true); _pictures.Refresh(); _ = _git.RefreshAsync(); }, 150);
         App.Services.Repos.Changed += gitChanged;
-        Action theme = () => { _editor.Background = Ui.Tk("bgEditor"); _editor.Foreground = Ui.Tk("textCode"); _editor.TextArea.TextView.Redraw(); _ = PushThemeAsync(); };
+        Action theme = () => { _editor.Background = Ui.Tk("bgEditor"); _editor.Foreground = Ui.Tk("textCode"); TintSelection(_editor); _pictures.Refresh(); _ = PushThemeAsync(); };
+        // Settings → Wiki → Pictures in the editor (and their height) apply at once.
+        var settingsChanged = Ui.Debounced(() => _pictures.Refresh(), 100);
+        Action config = settingsChanged;
         Wiki.Changed += changed;
         Ui.ThemeChanged += theme;
-        if (_standalone) DetachedFromVisualTree += (_, _) => { Wiki.Changed -= changed; App.Services.Repos.Changed -= gitChanged; Ui.ThemeChanged -= theme; };
+        App.Services.Config.Changed += config;
+        if (_standalone) DetachedFromVisualTree += (_, _) => { Wiki.Changed -= changed; App.Services.Repos.Changed -= gitChanged; Ui.ThemeChanged -= theme; App.Services.Config.Changed -= config; };
         _ = _git.RefreshAsync();
 
         ApplyMode();
         UpdateNavButtons();
         BuildTree();
         Open(standalone ?? Wiki.FindPage("Home") ?? Wiki.Pages().FirstOrDefault(WikiService.IsMarkdown));
+    }
+
+    /// <summary>
+    /// A see-through selection in the accent colour: the markdown's own colours stay readable under it (links are
+    /// drawn in the accent colour, and vanished under the default solid one).
+    /// </summary>
+    internal static void TintSelection(TextEditor editor)
+    {
+        editor.TextArea.SelectionBrush = new SolidColorBrush(Ui.Color("accent"), 0.32);
+        editor.TextArea.SelectionForeground = null;
+        editor.TextArea.SelectionBorder = null;
     }
 
     public void OnShown() { BuildTree(); _ = _git.RefreshAsync(); if (_editable && EffectiveMode != 2) _editor.Focus(); }
@@ -291,16 +319,83 @@ public sealed class WikiPage : UserControl, IPage
         WikiKind.Markdown => Icons.TextBoxOutline, WikiKind.Image => Icons.Image, WikiKind.Audio => Icons.MusicNote, WikiKind.Video => Icons.Video, _ => Icons.File,
     };
 
+    /// <summary>Folders with more entries than this start closed (until opened once) and list their entries in batches.</summary>
+    private const int BigFolder = 300;
+    /// <summary>How many entries of a folder the tree lists at a time; "Show more" adds the next batch.</summary>
+    private const int TreeBatch = 500;
+
+    /// <summary>
+    /// Whether a folder is open in the tree: as the user last left it; a big folder starts closed, unless it holds
+    /// the open page.
+    /// </summary>
+    private bool IsOpen(WikiNode node) =>
+        node.Children.Count > BigFolder
+            ? _opened.Contains(node.Path) || _path is not null && _path.StartsWith(node.Path + "/", StringComparison.Ordinal)
+            : !_collapsed.Contains(node.Path);
+
+    /// <remarks>
+    /// The tree holds a control for every entry it lists, so a wiki of tens of thousands of files must not list them
+    /// all: a closed folder lists its entries only once opened, a big one in batches, and an entry's right-click menu
+    /// is made when it is asked for.
+    /// </remarks>
     private TreeViewItem BuildNode(WikiNode node)
     {
         var name = node.IsFolder || !WikiService.IsMarkdown(node.Name) ? node.Name : Path.GetFileNameWithoutExtension(node.Name);
         var item = new TreeViewItem
         {
-            Tag = node, IsExpanded = !_collapsed.Contains(node.Path), IsSelected = !node.IsFolder && node.Path == _path,
+            Tag = node, IsExpanded = node.IsFolder && IsOpen(node), IsSelected = !node.IsFolder && node.Path == _path,
             Header = Ui.Row(6,
                 new PathIcon { Data = IconFor(node), Width = 13, Height = 13, Foreground = node.IsFolder ? Ui.Tk("warn") : Ui.Dim },
                 new TextBlock { Text = name, FontSize = 13 }),
         };
+        item.ContextRequested += (_, e) =>
+        {
+            if (e.Handled) return;
+            e.Handled = true;
+            item.ContextMenu ??= NodeMenu(node);
+            item.ContextMenu.Open(item);
+        };
+        if (node.IsFolder)
+        {
+            var listed = false;
+            void List()
+            {
+                if (listed) return;
+                listed = true;
+                item.Items.Clear();
+                AddEntries(item, node, 0);
+            }
+            if (item.IsExpanded) List();
+            else if (node.Children.Count > 0) item.Items.Add(new TreeViewItem { Header = "…", IsEnabled = false }); // shows the expander
+            item.PropertyChanged += (_, e) =>
+            {
+                if (e.Property != TreeViewItem.IsExpandedProperty) return;
+                if (item.IsExpanded) List();
+                if (_buildingTree) return;
+                if (item.IsExpanded) { _collapsed.Remove(node.Path); _opened.Add(node.Path); }
+                else { _collapsed.Add(node.Path); _opened.Remove(node.Path); }
+            };
+        }
+        return item;
+    }
+
+    /// <summary>Lists a batch of a folder's entries in its tree item, starting at <paramref name="from"/>, then "Show more" if there are more.</summary>
+    private void AddEntries(TreeViewItem item, WikiNode folder, int from)
+    {
+        var end = Math.Min(folder.Children.Count, from + TreeBatch);
+        for (var i = from; i < end; i++) item.Items.Add(BuildNode(folder.Children[i]));
+        if (end >= folder.Children.Count) return;
+        var more = new TreeViewItem();
+        more.Header = Ui.TextButton($"Show {Math.Min(TreeBatch, folder.Children.Count - end):N0} more of {folder.Children.Count - end:N0}…", () =>
+        {
+            item.Items.Remove(more);
+            AddEntries(item, folder, end);
+        });
+        item.Items.Add(more);
+    }
+
+    private ContextMenu NodeMenu(WikiNode node)
+    {
         var menu = new ContextMenu();
         if (!node.IsFolder)
         {
@@ -320,17 +415,7 @@ public sealed class WikiPage : UserControl, IPage
         menu.Items.Add(new Separator());
         menu.Items.Add(Ui.Item("Rename or Move…", () => { _ = RenameAsync(node); }));
         menu.Items.Add(Ui.Item("Delete…", () => { _ = DeleteAsync(node); }));
-        item.ContextMenu = menu;
-        if (node.IsFolder)
-        {
-            item.PropertyChanged += (_, e) =>
-            {
-                if (e.Property != TreeViewItem.IsExpandedProperty || _buildingTree) return;
-                if (item.IsExpanded) _collapsed.Remove(node.Path); else _collapsed.Add(node.Path);
-            };
-            foreach (var child in node.Children) item.Items.Add(BuildNode(child));
-        }
-        return item;
+        return menu;
     }
 
     private WikiNode? SelectedNode => (_tree.SelectedItem as TreeViewItem)?.Tag as WikiNode
@@ -410,6 +495,7 @@ public sealed class WikiPage : UserControl, IPage
         catch (Exception ex) { Ui.Toast(this, "Could not open the page", ex.Message); }
         finally { _loading = false; }
         State.RememberWiki(found);
+        Avamux.Core.Diagnostics.Timeline.Note("wiki page opened", found);
         UpdateTitle();
         BuildTree();
         ApplyMode();
@@ -490,6 +576,7 @@ public sealed class WikiPage : UserControl, IPage
         if (_previewReady) return;
         if (!await WebViews.WaitForAsync(_preview, "typeof window.setContent === 'function'")) { Log.Warn("wiki", "The preview page did not start."); return; }
         _previewReady = true;
+        Avamux.Core.Diagnostics.Timeline.Note("wiki preview ready");
         await PushThemeAsync();
         await RenderAsync();
     }
@@ -523,6 +610,7 @@ public sealed class WikiPage : UserControl, IPage
         try
         {
             await _preview.InvokeScript($"(function(){{ setContent({JsonSerializer.Serialize(html)}, {JsonSerializer.Serialize(folder)}, {JsonSerializer.Serialize(path ?? "")}, {scroll.ToString(System.Globalization.CultureInfo.InvariantCulture)}); return 'ok'; }})()");
+            Avamux.Core.Diagnostics.Timeline.Note("wiki rendered", path);
         }
         catch (Exception ex) { Log.Warn("wiki", "Preview update failed: " + ex.Message); }
     }

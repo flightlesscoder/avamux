@@ -102,6 +102,7 @@ public sealed partial class TerminalManager : IDisposable
             _sessions.Add(session);
         }
         Log.Info("terminal", $"Started terminal {session.Id}: {command} {string.Join(' ', args)} (pid {session.Pid}) in {cwd}");
+        Diagnostics.Timeline.Note("terminal started", session.Id);
         Created?.Invoke(session);
         Changed?.Invoke();
         return session;

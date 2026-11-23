@@ -41,11 +41,13 @@ public sealed class WatchService : IDisposable
 
     private void LoadPluginFolder()
     {
+        var count = 0;
         foreach (var dll in Directory.EnumerateFiles(_paths.PluginsDir, "*.dll", SearchOption.AllDirectories))
         {
-            try { foreach (var p in LoadProviders(dll)) _providers[p.Kind] = p; }
+            try { foreach (var p in LoadProviders(dll)) _providers[p.Kind] = p; count++; }
             catch (Exception ex) { Log.Warn("watch", $"Plugin {dll} not loaded: {ex.Message}"); }
         }
+        Diagnostics.Timeline.Note("watch plugins loaded", count.ToString());
     }
 
     private static readonly Dictionary<string, List<IWatchProvider>> AssemblyCache = new();

@@ -384,6 +384,7 @@ public sealed class CustomPluginPage : UserControl, ICustomPage
                 $"{_plugin.GetType().FullName}.CreateView returned {(_view is null ? "nothing" : _view.GetType().FullName)}; it has to return an Avalonia Control. " +
                 "If it did return one, the plugin brought its own copy of Avalonia: reference Avalonia without copying it next to the plugin.");
             Log.Info("page", $"Loaded plugin page '{item.Name}' ({_plugin.GetType().FullName} from {path})");
+            Avamux.Core.Diagnostics.Timeline.Note("plugin page loaded", item.Name);
         }
         catch (Exception ex)
         {

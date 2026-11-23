@@ -26,6 +26,8 @@ public sealed class AppHost(MainWindow window, IClassicDesktopStyleApplicationLi
     {
         var target = title is null ? window : lifetime.Windows.FirstOrDefault(w => w.IsVisible && (w.Title ?? "").Contains(title, StringComparison.OrdinalIgnoreCase))
             ?? throw new ArgumentException($"No open window has '{title}' in its title.");
+        // A minimized window is not laid out: a page shown since then (app nav) would be drawn as it was before.
+        target.UpdateLayout();
         var scale = target.RenderScaling;
         var size = new Avalonia.PixelSize((int)(target.Bounds.Width * scale), (int)(target.Bounds.Height * scale));
         using var bitmap = new Avalonia.Media.Imaging.RenderTargetBitmap(size, new Avalonia.Vector(96 * scale, 96 * scale));

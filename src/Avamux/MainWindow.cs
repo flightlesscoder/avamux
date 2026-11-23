@@ -336,6 +336,7 @@ public sealed class MainWindow : AppWindow
     private void Show(string key)
     {
         var page = GetOrCreate(key);
+        Avamux.Core.Diagnostics.Timeline.Note("page shown", key);
         var leaving = CurrentPage != key && _pages.GetValueOrDefault(CurrentPage) is ICustomPage { } old && old is Control { IsVisible: true } ? old : null;
         foreach (var p in _pages.Values) p.IsVisible = ReferenceEquals(p, page);
         // Before the hidden pages' web views are taken off screen: browser panes kept alive move to the parking layer.

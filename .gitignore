@@ -6,3 +6,6 @@ obj/
 avamux.local.json
 publish/
 Directory.Build.local.props
+
+# Load test reports (scripts/load-tests.sh)
+TestResults/

@@ -3,6 +3,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using Avamux.Core;
+using Avamux.Core.Diagnostics;
 using Avamux.Core.Ipc;
 using Avamux.Core.Logging;
 
@@ -23,7 +24,9 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            Timeline.Note("ui toolkit ready");
             Services = new AppServices();
+            Timeline.Note("services created");
             Log.Info("app", $"avamux starting (pid {Environment.ProcessId}, data {Services.Paths.DataDir})");
             Dispatcher.UIThread.UnhandledException += (_, e) =>
             {
@@ -36,15 +39,23 @@ public partial class App : Application
             };
             // The web server must be listening before any web view navigates to it.
             Services.StartAsync().GetAwaiter().GetResult();
+            Timeline.Note("services started");
             Views.ThemeManager.Initialize(this);
             Services.Config.Changed += () => Dispatcher.UIThread.Post(() => Views.ThemeManager.Apply(this));
             var window = new MainWindow();
+            Timeline.Note("window created");
+            window.Opened += (_, _) =>
+            {
+                Timeline.NoteOnce("window opened");
+                window.RequestAnimationFrame(_ => Timeline.NoteOnce("first frame"));
+            };
             Services.Host = new AppHost(window, desktop);
             desktop.MainWindow = window;
             Avamux.Browser.BrowserHost.Instance.Start();
             Avamux.Core.Terminal.TerminalManager.TabOf = Views.TerminalLayout.TabOf;
             _ipc = new IpcServer(Services.Paths.SocketPath, Services.Commands);
             _ipc.Start();
+            Timeline.Note("commands ready");
             desktop.ShutdownRequested += (_, _) => Shutdown();
             desktop.Exit += (_, _) => Shutdown();
         }
@@ -55,8 +66,17 @@ public partial class App : Application
     private void Shutdown()
     {
         if (Interlocked.Exchange(ref _down, 1) == 1) return;
+        Timeline.Note("shutdown started");
         Log.Info("app", "avamux shutting down");
         _ipc?.Dispose();
-        try { Services.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3)); } catch { }
+        try
+        {
+            // Closed on the thread pool: this runs on the UI thread, which waits here, and continuations of the web
+            // server's shutdown that came back to the UI thread would wait for it in turn until the time ran out.
+            if (!Task.Run(() => Services.DisposeAsync().AsTask()).Wait(TimeSpan.FromSeconds(3))) Timeline.Note("services still closing after 3 s");
+        }
+        catch { }
+        Timeline.Note("services closed");
+        Timeline.Save();
     }
 }

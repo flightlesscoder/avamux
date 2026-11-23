@@ -10,6 +10,12 @@ namespace Avamux.Views;
 /// <summary>Pictures and files on the clipboard, with a command-line fallback where the toolkit cannot reach them.</summary>
 public static class ClipboardFiles
 {
+    /// <summary>
+    /// Whether the session's own clipboard tools (wl-paste, xclip, wl-copy) may be used when the toolkit's
+    /// clipboard has nothing. Tests turn it off, so they only ever see the clipboard they filled themselves.
+    /// </summary>
+    internal static bool UseSystemTools { get; set; } = true;
+
     /// <summary>Local paths of files on the clipboard (copied in a file manager), or an empty list.</summary>
     public static async Task<IReadOnlyList<string>> FilesAsync(TopLevel top)
     {
@@ -39,7 +45,7 @@ public static class ClipboardFiles
             }
         }
         catch (Exception ex) { Log.Debug("clipboard", "No bitmap through the toolkit: " + ex.Message); }
-        if (!OperatingSystem.IsLinux()) return null;
+        if (!OperatingSystem.IsLinux() || !UseSystemTools) return null;
         // A Wayland session's clipboard is not always visible to an X11 client; ask the session's own tools.
         return await RunAsync("wl-paste", ["--type", "image/png"]) ?? await RunAsync("xclip", ["-selection", "clipboard", "-t", "image/png", "-o"]);
     }
@@ -57,7 +63,7 @@ public static class ClipboardFiles
             }
         }
         catch (Exception ex) { Log.Debug("clipboard", "Could not set a bitmap through the toolkit: " + ex.Message); }
-        if (OperatingSystem.IsLinux())
+        if (OperatingSystem.IsLinux() && UseSystemTools)
         {
             var mime = Path.GetExtension(file).ToLowerInvariant() switch { ".svg" => "image/svg+xml", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp", _ => "image/png" };
             if (await FeedAsync("wl-copy", ["--type", mime], file) || await FeedAsync("xclip", ["-selection", "clipboard", "-t", mime, "-i"], file)) return true;

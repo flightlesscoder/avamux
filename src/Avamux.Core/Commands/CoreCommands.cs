@@ -118,6 +118,8 @@ public sealed partial class CommandRegistry
     private void AddAppCommands(AppServices s)
     {
         Add("app ping", "Check that avamux is running.", [], _ => "pong");
+        Add("app timeline", "When the running instance reached each milestone, in ms since it started: first frame, first terminal output, wiki pages rendered, plugins loaded, …", [],
+            _ => Diagnostics.Timeline.ToJson());
         Add("app status", "Show the running instance: version, uptime, current page, counts.", [], _ => new JsonObject
         {
             ["version"] = typeof(AppServices).Assembly.GetName().Version?.ToString(3),

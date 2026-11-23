@@ -17,12 +17,15 @@ internal static class Program
     {
         if (args.Length > 0 && args[0] != "--gui") return Cli.RunAsync(args).GetAwaiter().GetResult();
 
+        Avamux.Core.Diagnostics.Timeline.Note("main");
         var paths = new AppPaths();
         // Only one instance: if one answers on the socket, bring it forward and leave.
         if (IpcClient.IsRunningAsync(paths.SocketPath).GetAwaiter().GetResult())
         {
             IpcClient.SendAsync(paths.SocketPath, "app activate", new JsonObject()).GetAwaiter().GetResult();
             Console.WriteLine("avamux is already running; brought it to the front. Use `avamux /?` for commands.");
+            Avamux.Core.Diagnostics.Timeline.Note("handed over to the running instance");
+            Avamux.Core.Diagnostics.Timeline.Save();
             return 0;
         }
 
@@ -43,6 +46,7 @@ internal static class Program
         try
         {
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+            Avamux.Core.Diagnostics.Timeline.Note("exit");
             return 0;
         }
         catch (Exception ex)
