@@ -155,10 +155,54 @@ public sealed class RepoService
     }
 
     /// <summary>Makes the folder a git repository. Nothing is committed.</summary>
-    public async Task InitAsync(RepoEntry repo)
+    /// <param name="gitignore">Written as the repository's .gitignore when it has none yet.</param>
+    public async Task InitAsync(RepoEntry repo, string? gitignore = null)
     {
         Directory.CreateDirectory(repo.Path);
         Check(await GitAsync(repo.Path, "init"));
+        if (gitignore is not null) GitIgnore.WriteDefault(repo.Path, gitignore);
+    }
+
+    /// <summary>
+    /// Adds a pattern to the repository's .gitignore. Files git already tracks are not affected by that alone, so
+    /// <paramref name="untrack"/> takes those out of the index (they stay on disk; the next commit records them gone).
+    /// </summary>
+    public async Task IgnoreAsync(RepoEntry repo, string pattern, IEnumerable<string>? untrack = null)
+    {
+        GitIgnore.Add(repo.Path, pattern);
+        foreach (var path in untrack ?? [])
+            Check(await GitAsync(repo.Path, "rm", "-r", "--cached", "--quiet", "--ignore-unmatch", "--", path.TrimEnd('/')));
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Of the given files, those that are at least <paramref name="largeBytes"/> big, and those that are not text
+    /// (a zero byte in their first 8 KB, as git judges it), pictures excepted. Missing files (deletions) are skipped.
+    /// </summary>
+    public static List<HeavyFile> HeavyFiles(RepoEntry repo, IEnumerable<string> paths, long largeBytes)
+    {
+        var heavy = new List<HeavyFile>();
+        var buffer = new byte[8000];
+        foreach (var path in paths.Distinct())
+        {
+            var full = System.IO.Path.Combine(repo.Path, path);
+            try
+            {
+                var info = new FileInfo(full);
+                if (!info.Exists) continue;
+                var binary = false;
+                if (!GitIgnore.Pictures.Contains(info.Extension))
+                {
+                    using var stream = info.OpenRead();
+                    var read = stream.Read(buffer, 0, buffer.Length);
+                    binary = Array.IndexOf(buffer, (byte)0, 0, read) >= 0;
+                }
+                if (binary || info.Length >= largeBytes) heavy.Add(new HeavyFile(path, info.Length, binary));
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return heavy;
     }
 
     /// <summary>The commits that changed one file, newest first, following it through renames.</summary>

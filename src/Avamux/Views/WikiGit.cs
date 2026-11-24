@@ -118,11 +118,11 @@ internal sealed class WikiGitMenu
         {
             menu.Items.Add(Ui.Item("Start Keeping History with Git", async () =>
             {
-                await Repos.InitAsync(Repo);
+                await Repos.InitAsync(Repo, GitIgnore.WikiDefault);
                 await RefreshAsync();
-                Ui.Toast(_owner, "The wiki is now a git repository", "Commit to record its first version.");
+                Ui.Toast(_owner, "The wiki is now a git repository", "Commit to record its first version. Its .gitignore leaves out system and editor clutter.");
             }, icon: Icons.SourceBranch));
-            menu.Items.Add(new MenuItem { Header = $"Runs git init in {Repo.Path}", IsEnabled = false });
+            menu.Items.Add(new MenuItem { Header = $"Runs git init in {Repo.Path}, and writes a .gitignore if there is none", IsEnabled = false });
             menu.Open(Button);
             return;
         }

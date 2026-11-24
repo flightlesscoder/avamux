@@ -131,6 +131,10 @@ public sealed class WikiSettings
     public double EditorPictureHeight { get; set; } = 220;
     /// <summary>With the editor and the preview side by side, scrolling one scrolls the other to the same place.</summary>
     public bool SyncScroll { get; set; } = true;
+    /// <summary>Before committing the wiki, point out files that are big or not text (pictures excepted), which git keeps forever.</summary>
+    public bool CommitWarning { get; set; } = true;
+    /// <summary>Files this many megabytes or more count as big for <see cref="CommitWarning"/>.</summary>
+    public double CommitWarningMegabytes { get; set; } = 5;
 }
 
 public sealed class UiSettings
