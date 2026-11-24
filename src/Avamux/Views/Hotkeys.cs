@@ -23,6 +23,7 @@ public static class Hotkeys
         var mac = OperatingSystem.IsMacOS();
         string[] Cmd(params string[] keys) => mac ? keys : [];
         var boss = settings.Ui.BossKey?.Trim() ?? "";
+        var palette = settings.Ui.CommandPaletteKey?.Trim() ?? "";
         var linksInPane = settings.Browser.TerminalLinksInPane;
 
         return
@@ -33,6 +34,10 @@ public static class Hotkeys
                     ? E("Boss key: swap the window for the boss screen and back (Settings → Window)", boss)
                     : E("Boss key: switched off; set one under Settings → Window", "—"),
                 E("Leave the boss screen", "Esc"),
+                palette.Length > 0
+                    ? E("Command palette (a preview): go to a page, run an action, open a wiki page (Settings → Window)", palette)
+                    : E("Command palette: switched off; set a key under Settings → Window", "—"),
+                E("Command palette: choose, run, close", "↑ ↓", "Enter", "Esc"),
             ]),
             new("Terminals", "Every other key goes to the program running in the tab.",
             [

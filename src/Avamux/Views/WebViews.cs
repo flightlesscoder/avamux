@@ -84,10 +84,12 @@ public static class WebViews
             if (web.TryGetPlatformHandle() is not IGtkWebViewPlatformHandle { WebKitWebView: var v } || v == IntPtr.Zero) return;
             view = v;
             _ = Browser.WebKitGtk.WatchPressesAsync(v, () => Avalonia.Threading.Dispatcher.UIThread.Post(() => { CloseMenus(); FocusNative(web); }));
+            // Keys typed into the page never reach the window, so the command palette's key is watched here too.
+            _ = Browser.WebKitGtk.WatchKeysAsync(v, (keyval, name, state, down) => CommandPalette.FromWebView(web, keyval, name, state, down));
         };
         web.AdapterDestroyed += (_, _) =>
         {
-            if (view != IntPtr.Zero) Browser.WebKitGtk.UnwatchPresses(view);
+            if (view != IntPtr.Zero) { Browser.WebKitGtk.UnwatchPresses(view); Browser.WebKitGtk.UnwatchKeys(view); }
             view = IntPtr.Zero;
         };
     }

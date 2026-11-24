@@ -44,6 +44,7 @@ public partial class App : Application
             Timeline.Note("services started");
             Views.ThemeManager.Initialize(this);
             Services.Config.Changed += () => Dispatcher.UIThread.Post(() => Views.ThemeManager.Apply(this));
+            Views.CommandPalette.Install();
             var window = new MainWindow();
             Timeline.Note("window created");
             window.Opened += (_, _) =>

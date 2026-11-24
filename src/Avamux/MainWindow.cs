@@ -153,6 +153,11 @@ public sealed class MainWindow : AppWindow
 
     public T? Page<T>(string key) where T : Control => GetOrCreate(key) as T;
 
+    /// <summary>The pages in the navigation, in its order: key, name and icon (the command palette's "Go to").</summary>
+    public IReadOnlyList<(string Key, string Label, Geometry Icon)> Destinations() =>
+        NavItems.Where(i => IsShown(i.Key) && i.Key != "today").Select(i => (i.Key, i.Tip.Split(':')[0], (Geometry)i.Icon))
+            .Concat(Custom.Pages.Where(p => p.Enabled).Select(p => (p.Key, p.Name, (Geometry)CustomPages.IconFor(p)))).ToList();
+
     /// <summary>The AI pages are only in the navigation when switched on under Settings → AI Workloads.</summary>
     private static bool IsShown(string key)
     {
