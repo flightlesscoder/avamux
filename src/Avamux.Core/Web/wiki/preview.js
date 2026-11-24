@@ -248,6 +248,32 @@
     menu.style.left = Math.max(4, Math.min(menuAt.x, innerWidth - menu.offsetWidth - 6)) + 'px';
     menu.style.top = Math.max(4, Math.min(menuAt.y, innerHeight - menu.offsetHeight - 6)) + 'px';
   };
+  // A link's own items: open it, copy where it goes, copy its words. Tags copy as #tag.
+  function linkItems(a) {
+    if (!a) return [];
+    const text = (a.textContent || '').trim();
+    if (a.dataset.tag) return [['Copy Tag', () => post({ t: 'copyText', text: '#' + a.dataset.tag })]];
+    const href = a.getAttribute('href');
+    if (!href) return [];
+    if (href.startsWith('#')) {
+      const items = [['Copy Link', () => post({ t: 'copyText', text: href })]];
+      if (text) items.push(['Copy Link Text', () => post({ t: 'copyText', text })]);
+      return items;
+    }
+    const url = new URL(href, document.baseURI);
+    const items = [];
+    if (url.origin !== location.origin) {
+      items.push(['Open in Browser', () => post({ t: 'open', url: url.href })]);
+      items.push(['Copy Link', () => post({ t: 'copyText', text: url.href })]);
+    } else {
+      // A page or file in the wiki: its path in the wiki, as [[links]] and the command line take it.
+      const path = decodeURIComponent(url.pathname.replace(/^\/wiki\/raw\//, ''));
+      items.push(['Open', () => post({ t: 'page', path })]);
+      items.push(['Copy Link', () => post({ t: 'copyText', text: path })]);
+    }
+    if (text && text !== url.href) items.push(['Copy Link Text', () => post({ t: 'copyText', text })]);
+    return items;
+  }
   document.addEventListener('contextmenu', ev => {
     const img = ev.target.closest('img');
     if (!img) {
@@ -255,7 +281,11 @@
       ev.preventDefault();
       if (ev.target.closest('#menu')) return;
       const sel = String(window.getSelection() || '');
-      if (sel) showMenu(ev, [['Copy', () => post({ t: 'copyText', text: sel })]]);
+      const items = [];
+      if (sel) items.push(['Copy', () => post({ t: 'copyText', text: sel })]);
+      const link = linkItems(ev.target.closest('#content a'));
+      if (link.length) { if (items.length) items.push(null); items.push(...link); }
+      if (items.length) showMenu(ev, items);
       else hideMenu();
       menuAt = { x: ev.clientX, y: ev.clientY, time: Date.now() };
       post({ t: 'menu', sel });
