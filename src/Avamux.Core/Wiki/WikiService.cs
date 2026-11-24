@@ -360,7 +360,7 @@ public sealed partial class WikiService
     {
         var (meta, body) = SplitFrontMatter(markdown);
         // Tags and [[links]] become markdown on the same line, so line numbers in the body stay as written.
-        var text = WikiLink().Replace(WikiTags.Linkify(body), m =>
+        var text = WikiLink().Replace(WikiTags.Linkify(MarkdownLinks.AutolinkFiles(body)), m =>
         {
             if (m.Groups[1].Success) return m.Value;
             var target = m.Groups[2].Value.Trim();

@@ -63,7 +63,7 @@ public static class WikiTags
     }
 
     /// <summary>The lines of the body that hold ordinary text (not code), with their index, from <paramref name="start"/> on.</summary>
-    private static IEnumerable<(int Index, string Line)> BodyLines(string[] lines, int start)
+    internal static IEnumerable<(int Index, string Line)> BodyLines(string[] lines, int start)
     {
         string? fence = null;      // the fence that opened the code block we are in
         var previousBlank = true;   // indented code needs a blank line (or more code) above it

@@ -33,4 +33,14 @@ public class MarkdownLinkTests
         Assert.Equal("Other.md", MarkdownLinks.At(line, 25)!.Target);
         Assert.Null(MarkdownLinks.At(line, 26));
     }
+
+    [Fact]
+    public void Bare_file_addresses_become_links_in_the_preview_but_not_in_code()
+    {
+        var html = WikiService.Render("See file:///etc/hostname and [named](file:///tmp/a.txt) and <file:///tmp/b.txt>.\n\n```\nfile:///in/code\n```\n");
+        Assert.Contains("<a href=\"file:///etc/hostname\">file:///etc/hostname</a>", html);
+        Assert.Contains("<a href=\"file:///tmp/a.txt\">named</a>", html);
+        Assert.Contains("<a href=\"file:///tmp/b.txt\">file:///tmp/b.txt</a>", html);
+        Assert.DoesNotContain("<a href=\"file:///in/code", html);
+    }
 }

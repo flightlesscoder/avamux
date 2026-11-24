@@ -97,6 +97,28 @@ public static partial class MarkdownLinks
         return found;
     }
 
+    /// <summary>
+    /// Wraps bare file:/// addresses (outside code) in &lt;…&gt; so markdown makes them links, as it does by itself for
+    /// web addresses: the preview then shows what the editor shows. Lines stay where they are.
+    /// </summary>
+    public static string AutolinkFiles(string body)
+    {
+        if (body.IndexOf("file:", StringComparison.OrdinalIgnoreCase) < 0) return body;
+        var lines = body.Replace("\r\n", "\n").Split('\n');
+        var changed = false;
+        foreach (var (i, line) in WikiTags.BodyLines(lines, 0))
+        {
+            if (line.IndexOf("file:", StringComparison.OrdinalIgnoreCase) < 0) continue;
+            var bare = Find(line).Where(l => l.Kind == LinkKind.File && !l.IsWikiLink && l.Start == l.LabelStart && line[l.Start] is not ('<' or '[')).ToList();
+            if (bare.Count == 0) continue;
+            var sb = new System.Text.StringBuilder(line);
+            foreach (var l in bare.OrderByDescending(l => l.Start)) sb.Insert(l.End, '>').Insert(l.Start, '<');
+            lines[i] = sb.ToString();
+            changed = true;
+        }
+        return changed ? string.Join('\n', lines) : body;
+    }
+
     /// <summary>The link the given column of a line is on, if any.</summary>
     public static MarkdownLink? At(string line, int column) => Find(line).FirstOrDefault(l => column >= l.Start && column < l.End);
 }
