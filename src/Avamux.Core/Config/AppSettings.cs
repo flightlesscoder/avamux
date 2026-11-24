@@ -129,6 +129,8 @@ public sealed class WikiSettings
     public bool EditorPictures { get; set; } = true;
     /// <summary>Tallest a picture is drawn in the editor, in pixels. Smaller pictures keep their own size.</summary>
     public double EditorPictureHeight { get; set; } = 220;
+    /// <summary>With the editor and the preview side by side, scrolling one scrolls the other to the same place.</summary>
+    public bool SyncScroll { get; set; } = true;
 }
 
 public sealed class UiSettings

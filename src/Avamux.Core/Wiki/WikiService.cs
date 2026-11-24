@@ -352,9 +352,14 @@ public sealed partial class WikiService
         return sb.Append("</tbody></table>\n").ToString();
     }
 
-    public static string Render(string markdown)
+    /// <param name="sourceLines">
+    /// Mark each block with the page line it starts on (<c>data-line</c>, counted from 1 like the editor), so the
+    /// preview can scroll along with the editor.
+    /// </param>
+    public static string Render(string markdown, bool sourceLines = false)
     {
         var (meta, body) = SplitFrontMatter(markdown);
+        // Tags and [[links]] become markdown on the same line, so line numbers in the body stay as written.
         var text = WikiLink().Replace(WikiTags.Linkify(body), m =>
         {
             if (m.Groups[1].Success) return m.Value;
@@ -362,7 +367,27 @@ public sealed partial class WikiService
             var label = m.Groups[3].Success ? m.Groups[3].Value.Trim() : target;
             return $"[{label}]({Uri.EscapeDataString(target).Replace("%2F", "/")}.md)";
         });
-        return (meta is null ? "" : FrontMatterHtml(meta)) + Markdown.ToHtml(text, Pipeline);
+        var front = meta is null ? "" : FrontMatterHtml(meta);
+        if (!sourceLines) return front + Markdown.ToHtml(text, Pipeline);
+        if (front.Length > 0) front = front.Replace("<table class=\"frontmatter\"", "<table class=\"frontmatter\" data-line=\"1\"");
+        var skipped = Newlines(markdown) - Newlines(body); // the front matter's lines
+        var doc = Markdown.Parse(text, Pipeline);
+        foreach (var block in doc.Descendants<Block>())
+            if (block is not (LinkReferenceDefinitionGroup or LinkReferenceDefinition or BlankLineBlock))
+                block.GetAttributes().AddProperty("data-line", (block.Line + 1 + skipped).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var writer = new StringWriter();
+        var renderer = new HtmlRenderer(writer);
+        Pipeline.Setup(renderer);
+        renderer.Render(doc);
+        writer.Flush();
+        return front + writer;
+    }
+
+    private static int Newlines(string text)
+    {
+        var n = 0;
+        foreach (var c in text) if (c == '\n') n++;
+        return n;
     }
 
     /// <summary>Fenced code blocks go through <see cref="Syntax"/>, using the language named after the opening fence.</summary>
@@ -389,6 +414,9 @@ public sealed partial class WikiService
             var lang = Syntax.Normalize(info);
             renderer.EnsureLine();
             renderer.Write("<pre");
+            // Only the source line (Render with sourceLines): the class Markdig gives fenced blocks goes on <code> below.
+            if (block.TryGetAttributes()?.Properties?.FirstOrDefault(p => p.Key == "data-line") is { Key: not null } line)
+                renderer.Write(" data-line=\"").WriteEscape(line.Value ?? "").Write("\"");
             if (!string.IsNullOrWhiteSpace(info)) renderer.Write(" data-lang=\"").WriteEscape(info.Trim()).Write("\"");
             renderer.Write("><code");
             if (!string.IsNullOrWhiteSpace(info)) renderer.Write(" class=\"language-").WriteEscape(info.Trim().Split(' ')[0]).Write("\"");

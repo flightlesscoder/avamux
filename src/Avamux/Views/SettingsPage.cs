@@ -53,6 +53,7 @@ public sealed class SettingsPage : UserControl, IPage
         ["wiki.autoSaveSeconds"] = ("Seconds before saving", "How long a page must go without a change before it is saved automatically."),
         ["wiki.clickToPreviewMegabytes"] = ("Load big files on a click (MB)", "Pictures, PDFs, audio and video larger than this wait behind a \"Load preview\" button, and are not drawn in the editor. 0 loads everything at once."),
         ["wiki.editorPictures"] = ("Pictures in the editor", "Show the pictures a page embeds in the editor as well as the preview, each under the line that embeds it. The markdown stays as it is: click a picture to select its text."),
+        ["wiki.syncScroll"] = ("Scroll editor and preview together", "With both shown side by side, scrolling one scrolls the other to the same part of the page."),
         ["wiki.editorPictureHeight"] = ("Picture height in the editor", "Tallest a picture is drawn in the editor, in pixels (40 to 2000). Smaller pictures keep their own size."),
         ["wiki.rememberedPositions"] = ("Remembered scroll positions", "How many wiki files have their last scroll position remembered."),
         ["ui.navStyle"] = ("Navigation bar", "Standard shows icons with labels; mini is a slim bar of smaller icons with tooltips."),

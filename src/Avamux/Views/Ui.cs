@@ -109,6 +109,18 @@ public static class Ui
 
     public static T Dock<T>(this T control, Dock dock) where T : Control { DockPanel.SetDock(control, dock); return control; }
 
+    /// <summary>
+    /// Scrolls a text editor to a vertical offset. AvaloniaEdit 12's own ScrollToVerticalOffset leaves the editor
+    /// where it is, so this sets its scroll viewer's offset (once the editor has its template).
+    /// </summary>
+    public static void ScrollEditorTo(this AvaloniaEdit.TextEditor editor, double y)
+    {
+        editor.ApplyTemplate();
+        if (editor.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is { } viewer)
+            viewer.Offset = new Vector(viewer.Offset.X, Math.Max(0, y));
+        else editor.ScrollToVerticalOffset(y);
+    }
+
     /// <summary>Runs on the UI thread, coalescing bursts of calls into one.</summary>
     public static Action Debounced(Action action, int ms = 60)
     {

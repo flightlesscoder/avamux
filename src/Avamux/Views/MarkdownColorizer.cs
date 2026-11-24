@@ -51,13 +51,28 @@ public sealed class MarkdownColorizer : DocumentColorizingTransformer
             }
             at += length;
         }
-        // #tags in the accent colour: only on the lines drawn, and not in code (the highlighter marks fenced lines as one span).
+        // #tags and links: only on the lines drawn, and not in code (the highlighter marks fenced lines as one span).
         var lineSpans = _lines[index];
         if (lineSpans.Count == 1 && lineSpans[0].Kind is Tok.String or Tok.Meta) return;
         var text = CurrentContext.Document.GetText(line);
-        if (text.IndexOf('#') < 0) return;
-        var accent = Ui.Tk("accent");
-        foreach (var (offset, length) in Avamux.Core.Wiki.WikiTags.Spans(text))
-            ChangeLinePart(line.Offset + offset, line.Offset + offset + length, element => element.TextRunProperties.SetForegroundBrush(accent));
+        if (text.IndexOf('#') >= 0)
+        {
+            var accent = Ui.Tk("accent");
+            foreach (var (offset, length) in Avamux.Core.Wiki.WikiTags.Spans(text))
+                ChangeLinePart(line.Offset + offset, line.Offset + offset + length, element => element.TextRunProperties.SetForegroundBrush(accent));
+        }
+        // Links look as they do in the preview: the link colour, with the words that are shown underlined.
+        // A giant line (a pasted blob) is left alone, to keep typing in it quick.
+        if (text.Length > MaxLinkLine || text.IndexOfAny(LinkChars) < 0) return;
+        var link = Ui.Tk("link");
+        foreach (var l in Avamux.Core.Wiki.MarkdownLinks.Find(text))
+        {
+            ChangeLinePart(line.Offset + l.Start, line.Offset + l.End, element => element.TextRunProperties.SetForegroundBrush(link));
+            if (l.Label.Length > 0)
+                ChangeLinePart(line.Offset + l.LabelStart, line.Offset + l.LabelStart + l.Label.Length, element => element.TextRunProperties.SetTextDecorations(TextDecorations.Underline));
+        }
     }
+
+    private const int MaxLinkLine = 20_000;
+    private static readonly char[] LinkChars = ['[', ':', '<'];
 }

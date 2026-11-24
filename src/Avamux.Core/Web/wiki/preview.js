@@ -25,6 +25,7 @@
   window.setTheme = function (css) { document.getElementById('theme').textContent = ':root { ' + css + ' }'; return true; };
 
   window.setContent = function (html, folder, path, scroll) {
+    anchors = null;
     const same = path === current;
     const y = same ? window.scrollY : (scroll || 0);
     current = path;
@@ -82,12 +83,66 @@
     return true;
   };
 
+  // ---- scrolling along with the editor ----
+  // Blocks carry the page line they start on (data-line). The editor says which line is at its top (with a
+  // fraction); the preview puts the same place at its top, between the blocks around it. And the other way round.
+  let anchors = null;      // [{ line, y }] in page order, measured lazily (layout changes with pictures and width)
+  let syncing = 0;         // until when scroll events come from syncTo, not the reader
+  let lastLine = 1;        // the page's line count, for the stretch after the last block
+  window.syncEnabled = false;
+  function measure() {
+    if (anchors) return anchors;
+    anchors = [];
+    let prev = -1;
+    for (const el of content.querySelectorAll('[data-line]')) {
+      const line = +el.dataset.line;
+      if (!(line > prev)) continue; // nested blocks (a list's paragraphs) only when they move on
+      anchors.push({ line, y: el.getBoundingClientRect().top + window.scrollY });
+      prev = line;
+    }
+    return anchors;
+  }
+  new ResizeObserver(() => { anchors = null; }).observe(content);
+  function bottom() { return Math.max(0, document.documentElement.scrollHeight - innerHeight); }
+  /** Scrolls so the given editor line (fractional, from 1) is at the top. */
+  window.syncTo = function (line, lines) {
+    if (lines) lastLine = lines;
+    const a = measure();
+    let y;
+    if (!a.length) y = bottom() * Math.min(1, Math.max(0, (line - 1) / Math.max(1, lastLine - 1)));
+    else {
+      let i = a.length - 1;
+      while (i >= 0 && a[i].line > line) i--;
+      const from = i < 0 ? { line: 1, y: 0 } : a[i];
+      const to = i + 1 < a.length ? a[i + 1] : { line: lastLine + 1, y: document.documentElement.scrollHeight };
+      y = from.y + (to.y - from.y) * Math.min(1, Math.max(0, (line - from.line) / Math.max(1, to.line - from.line)));
+    }
+    syncing = Date.now() + 150;
+    window.scrollTo(0, Math.min(bottom(), Math.max(0, y)));
+    return true;
+  };
+  /** The editor line (fractional) at the top of the preview. */
+  function lineAtTop() {
+    const a = measure();
+    const y = window.scrollY;
+    if (!a.length) return 1 + (lastLine - 1) * (bottom() ? y / bottom() : 0);
+    let i = a.length - 1;
+    while (i >= 0 && a[i].y > y) i--;
+    const from = i < 0 ? { line: 1, y: 0 } : a[i];
+    const to = i + 1 < a.length ? a[i + 1] : { line: lastLine + 1, y: document.documentElement.scrollHeight };
+    return from.line + (to.line - from.line) * Math.min(1, Math.max(0, (y - from.y) / Math.max(1, to.y - from.y)));
+  }
+  let syncFrame = 0;
+
   let scrollTimer = null;
   window.addEventListener('scroll', () => {
     if (restoring || !current) return;
     clearTimeout(scrollTimer);
     const path = current;
     scrollTimer = setTimeout(() => post({ t: 'scroll', path, y: Math.round(window.scrollY) }), 250);
+    // The reader scrolled the preview: the editor follows (once a frame).
+    if (window.syncEnabled && Date.now() > syncing && !syncFrame)
+      syncFrame = requestAnimationFrame(() => { syncFrame = 0; post({ t: 'sync', path, line: lineAtTop() }); });
   }, { passive: true });
 
   // ---- zoom and pan ----
@@ -263,7 +318,7 @@
     const url = new URL(href, document.baseURI);
     const items = [];
     if (url.origin !== location.origin) {
-      items.push(['Open in Browser', () => post({ t: 'open', url: url.href })]);
+      items.push([url.protocol === 'file:' ? 'Open' : 'Open in Browser', () => post({ t: 'open', url: url.href })]);
       items.push(['Copy Link', () => post({ t: 'copyText', text: url.href })]);
     } else {
       // A page or file in the wiki: its path in the wiki, as [[links]] and the command line take it.
