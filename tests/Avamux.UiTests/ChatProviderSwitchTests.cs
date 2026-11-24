@@ -38,6 +38,28 @@ public sealed class ChatProviderSwitchTests
         Pick(h, "pi");
     }
 
+    private static string Empty(ChatHarness h) => h.Texts().First(t => t.StartsWith("Type a message below"));
+
+    [AvaloniaFact]
+    public void The_text_before_the_first_message_follows_the_choices()
+    {
+        using var h = new ChatHarness();
+        Assert.Contains("with Claude Code.", Empty(h));
+        Assert.Contains("It works in " + h.Services.Ai.DefaultFolder, Empty(h));
+        Pick(h, "pi");
+        h.WaitFor(() => Empty(h).Contains("with pi."));
+        Pick(h, "Claude Code");
+        h.WaitFor(() => Empty(h).Contains("with Claude Code."));
+        Pick(h, "Haiku", hh => hh.Page.GetVisualDescendants().OfType<ComboBox>().First(c => c.Items.OfType<ComboBoxItem>().Any(i => i.Content as string == "Haiku")));
+        h.WaitFor(() => Empty(h).Contains("with Claude Code (Haiku)."));
+        var folder = Path.Combine(h.Root, "elsewhere");
+        Directory.CreateDirectory(folder);
+        h.Page.ConfigureAsync(folder: folder).GetAwaiter().GetResult();
+        h.Settle();
+        Assert.Contains("It works in " + folder, Empty(h));
+        Assert.Contains("with Claude Code (Haiku).", Empty(h));
+    }
+
     [AvaloniaFact]
     public void Switching_back_and_forth_in_a_chat()
     {

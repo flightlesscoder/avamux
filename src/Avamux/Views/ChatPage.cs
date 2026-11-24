@@ -262,12 +262,8 @@ public sealed class ChatPage : UserControl, IPage
         _rows.Clear();
         _scroll.IsVisible = false;
         _empty.IsVisible = true;
-        var providers = Ai.Providers;
-        _empty.Text = providers.Count == 0
-            ? "No AI provider is set up. Add one under Settings → AI Chat (Claude Code and pi are there to start with)."
-            : $"Type a message below to start a conversation with {Ai.Config(App.Services.Config.Settings.Ai.ChatProvider)?.Name ?? providers[0].Name}.\nIt works in {Ai.DefaultFolder}.";
         _title.Text = "New chat";
-        RefreshHeader();
+        RefreshHeader(); // also writes the text above, from what the header shows
         RefreshCards();
         RefreshBusy();
         _ring.Set(null, null, null);
@@ -351,8 +347,22 @@ public sealed class ChatPage : UserControl, IPage
             var folder = chat?.Folder ?? _pendingFolder ?? Ai.DefaultFolder;
             ((TextBlock)((StackPanel)_folder.Content!).Children.OfType<TextBlock>().FirstOrDefault()!)?.SetValue(TextBlock.TextProperty, System.IO.Path.GetFileName(folder.TrimEnd('/')));
             ToolTip.SetTip(_folder, "Works in " + folder + " (click to change)");
+            if (chat is null) UpdateEmpty();
         }
         finally { _loadingHeader = was; }
+    }
+
+    /// <summary>What a new chat will use, as the header's dropdowns and folder show it, before the first message.</summary>
+    private void UpdateEmpty()
+    {
+        if (_chatId is not null) return;
+        if (_provider.SelectedItem is not ComboBoxItem { Content: string provider })
+        {
+            _empty.Text = "No AI provider is set up. Add one under Settings → AI Chat (Claude Code and pi are there to start with).";
+            return;
+        }
+        var model = _model.SelectedItem is ComboBoxItem { Tag: string { Length: > 0 }, Content: string name } ? $" ({name})" : "";
+        _empty.Text = $"Type a message below to start a conversation with {provider}{model}.\nIt works in {_pendingFolder ?? Ai.DefaultFolder}.";
     }
 
     /// <summary>The provider whose models the model dropdown lists.</summary>
@@ -397,6 +407,7 @@ public sealed class ChatPage : UserControl, IPage
             SetItems(_model, items, current);
             if (_model.SelectedItem is null) _model.SelectedIndex = 0;
             _modelsOf = config.Id;
+            UpdateEmpty();
         }
         finally { _loadingHeader = was; }
     }
@@ -408,7 +419,7 @@ public sealed class ChatPage : UserControl, IPage
         Later(() => ConfigureAsync(model: typed));
     }
 
-    private async Task ConfigureAsync(string? provider = null, string? model = null, string? effort = null, string? folder = null)
+    internal async Task ConfigureAsync(string? provider = null, string? model = null, string? effort = null, string? folder = null)
     {
         if (_chatId is not { } id)
         {
@@ -422,7 +433,8 @@ public sealed class ChatPage : UserControl, IPage
             _pendingModel = model ?? _pendingModel;
             _pendingEffort = effort ?? _pendingEffort;
             _pendingFolder = folder ?? _pendingFolder;
-            if (provider is not null) RefreshHeader();
+            if (provider is not null || folder is not null) RefreshHeader();
+            else UpdateEmpty();
             return;
         }
         await RunAsync(() => Chats.ConfigureAsync(id, provider, model, effort, folder));
