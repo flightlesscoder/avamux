@@ -112,7 +112,7 @@ public sealed class SettingsPage : UserControl, IPage
         ["ui.startPage"] = ("Start page", "Page shown when avamux starts."),
         ["ui.taskbarAlert"] = ("Taskbar alerts", "Flash or badge the taskbar icon when something needs attention while avamux is in the background."),
         ["ui.bossKey"] = ("Boss key", "Swaps the window for the boss screen and back (Esc also brings avamux back). Written like Ctrl+Shift+B or F12; empty turns it off."),
-        ["ui.commandPaletteKey"] = ("Command palette key", "Opens the command palette from anywhere, terminals included: Shift Shift (press Shift twice quickly), Ctrl Ctrl, Alt Alt, or a shortcut such as Ctrl+Shift+P. Empty turns it off."),
+        ["ui.commandPaletteKey"] = ("Command palette key", "Opens the command palette from anywhere, terminals included: Shift Shift (press Shift twice quickly), Ctrl Ctrl, Alt Alt, Cmd Cmd, or a shortcut such as Ctrl+Shift+P (Cmd+Shift+P on a Mac). Empty turns it off."),
         ["ui.bossScreen"] = ("Boss screen", "What it pretends to be: a budget spreadsheet, or a build that never quite finishes."),
         ["ui.bossHidesWindows"] = ("Boss screen minimizes other windows", "Also minimize avamux's other windows (detached terminals, the theme editor, …) while it is up."),
         ["browser.agentControl"] = ("Let agents drive the browser", "`avamux browser` commands (and the AI agents in terminal tabs that run them) can open panes, read pages, click and type. Off, only listing works."),

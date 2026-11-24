@@ -43,6 +43,51 @@ public sealed class CommandPaletteTests
         Assert.Null(key.Gesture);
     }
 
+    /// <summary>Feeds AppKit's events (as the macOS monitor gets them) to the palette key; true when one opens it.</summary>
+    private static bool Feed(PaletteKey key, long ms, ulong type, ushort keyCode, ulong flags, string chars = "")
+    {
+        var e = MacKeyMonitor.Translate(type, keyCode, flags, chars)!.Value;
+        if (e.IsKey) { if (e.Down) key.Down(PaletteKey.Mod.None, ms); return false; }
+        return e.Down ? key.Down(e.Mod, ms) : key.Up(e.Mod, ms);
+    }
+
+    [Fact]
+    public void On_macOS_shift_comes_as_flag_changes_and_twice_opens_the_palette()
+    {
+        const ulong flags = MacKeyMonitor.FlagsChanged, down = MacKeyMonitor.KeyDown;
+        const ulong shift = MacKeyMonitor.ShiftFlag, cmd = MacKeyMonitor.CommandFlag;
+        var key = new PaletteKey();
+        key.Configure("Shift Shift");
+        // Left Shift (56) pressed: its flag is set; released: cleared. Twice, quickly.
+        Assert.False(Feed(key, 0, flags, 56, shift));
+        Assert.False(Feed(key, 60, flags, 56, 0));
+        Assert.False(Feed(key, 150, flags, 60, shift)); // right Shift counts too
+        Assert.True(Feed(key, 210, flags, 60, 0));
+        // Shift held for capitals: a key goes down in between, so no taps.
+        Feed(key, 1000, flags, 56, shift); Feed(key, 1020, down, 0, shift, "A"); Feed(key, 1060, flags, 56, 0);
+        Feed(key, 1100, flags, 56, shift); Feed(key, 1120, down, 11, shift, "B");
+        Assert.False(Feed(key, 1160, flags, 56, 0));
+        // Caps Lock (57) is something else pressed.
+        Feed(key, 2000, flags, 56, shift); Feed(key, 2050, flags, 56, 0); Feed(key, 2100, flags, 57, 1 << 16);
+        Feed(key, 2150, flags, 56, shift);
+        Assert.False(Feed(key, 2200, flags, 56, 0));
+
+        key.Configure("Cmd Cmd");
+        Assert.Equal(PaletteKey.Mod.Meta, key.Tap);
+        Feed(key, 3000, flags, 55, cmd); Feed(key, 3050, flags, 55, 0); Feed(key, 3150, flags, 54, cmd);
+        Assert.True(Feed(key, 3200, flags, 54, 0));
+        Assert.Equal(PaletteKey.Mod.Meta, PaletteKey.ModOf(Key.LWin));
+
+        // A shortcut with Command, as the monitor reports it.
+        key.Configure("Cmd+Shift+P");
+        Assert.NotNull(key.Gesture);
+        var e = MacKeyMonitor.Translate(down, 35, cmd | shift, "P")!.Value;
+        Assert.True(key.Matches(e.Name, e.Ctrl, e.Shift, e.Alt, e.Meta));
+        e = MacKeyMonitor.Translate(down, 35, MacKeyMonitor.ControlFlag | shift, "P")!.Value;
+        Assert.False(key.Matches(e.Name, e.Ctrl, e.Shift, e.Alt, e.Meta));
+        Assert.Null(MacKeyMonitor.Translate(1, 0, 0, "")); // a mouse event is not ours
+    }
+
     [Fact]
     public void Typing_narrows_by_words_and_letters_best_first()
     {

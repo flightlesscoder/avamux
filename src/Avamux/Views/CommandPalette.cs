@@ -12,12 +12,12 @@ namespace Avamux.Views;
 
 /// <summary>
 /// The key that opens the command palette (Settings → Window → Command palette key): a modifier pressed twice in
-/// quick succession ("Shift Shift", "Ctrl Ctrl", "Alt Alt") or an ordinary shortcut ("Ctrl+Shift+P"). A press only
+/// quick succession ("Shift Shift", "Ctrl Ctrl", "Alt Alt", "Cmd Cmd") or an ordinary shortcut ("Ctrl+Shift+P"). A press only
 /// counts as a tap when nothing else was pressed while it was down, so Shift held for capitals never opens it.
 /// </summary>
 public sealed class PaletteKey
 {
-    public enum Mod { None, Shift, Ctrl, Alt }
+    public enum Mod { None, Shift, Ctrl, Alt, Meta }
 
     private string? _spec;
     private Mod _tap;
@@ -42,7 +42,11 @@ public sealed class PaletteKey
         _gesture = null;
         var words = spec.ToLowerInvariant().Replace("+", " ").Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (words.Length == 2 && (words[0] == words[1] || words[0] == "double"))
-            _tap = words[1] switch { "shift" => Mod.Shift, "ctrl" or "control" => Mod.Ctrl, "alt" => Mod.Alt, _ => Mod.None };
+            _tap = words[1] switch
+            {
+                "shift" => Mod.Shift, "ctrl" or "control" => Mod.Ctrl, "alt" or "option" or "opt" => Mod.Alt,
+                "cmd" or "command" or "meta" or "super" or "win" => Mod.Meta, _ => Mod.None,
+            };
         if (_tap == Mod.None && spec.Length > 0)
             try { _gesture = KeyGesture.Parse(spec); } catch { _gesture = null; }
     }
@@ -52,6 +56,7 @@ public sealed class PaletteKey
         Key.LeftShift or Key.RightShift => Mod.Shift,
         Key.LeftCtrl or Key.RightCtrl => Mod.Ctrl,
         Key.LeftAlt or Key.RightAlt => Mod.Alt,
+        Key.LWin or Key.RWin => Mod.Meta,
         _ => Mod.None,
     };
 
@@ -86,14 +91,14 @@ public sealed class PaletteKey
 
     public bool Matches(Key key, KeyModifiers modifiers) => _gesture is { } g && g.Key == key && g.KeyModifiers == modifiers;
 
-    /// <summary>For keys a web view reports by name (GDK's: "p", "P", "F5", "1"), with Ctrl, Shift and Alt.</summary>
-    public bool Matches(string keyName, bool ctrl, bool shift, bool alt)
+    /// <summary>For keys reported by name (GDK's or AppKit's: "p", "P", "F5", "1"), with their modifiers.</summary>
+    public bool Matches(string keyName, bool ctrl, bool shift, bool alt, bool meta = false)
     {
         if (_gesture is not { } g) return false;
         var want = g.Key.ToString();
         var name = keyName.Length == 1 && char.IsDigit(keyName[0]) ? "D" + keyName : keyName;
         return string.Equals(want, name, StringComparison.OrdinalIgnoreCase)
-               && g.KeyModifiers.HasFlag(KeyModifiers.Control) == ctrl && g.KeyModifiers.HasFlag(KeyModifiers.Shift) == shift && g.KeyModifiers.HasFlag(KeyModifiers.Alt) == alt;
+               && g.KeyModifiers.HasFlag(KeyModifiers.Control) == ctrl && g.KeyModifiers.HasFlag(KeyModifiers.Shift) == shift && g.KeyModifiers.HasFlag(KeyModifiers.Alt) == alt && g.KeyModifiers.HasFlag(KeyModifiers.Meta) == meta;
     }
 }
 
@@ -152,8 +157,9 @@ public static class PaletteMatch
 /// <summary>
 /// The command palette (a preview of what is to come): pressed from anywhere, the terminals and the wiki's preview
 /// included, it lists pages to go to, a few actions and the wiki's pages, narrows them as you type, and runs the one
-/// picked. Keys come from every window (a class handler) and, on Linux, from every web view (see
-/// <see cref="WatchWebView"/>), since keys typed into a web view never reach the window.
+/// picked. Keys typed into a web view never reach the window, so they are watched where they can be seen: on macOS
+/// an AppKit monitor sees every key of the app (<see cref="MacKeyMonitor"/>); elsewhere a class handler sees every
+/// window's keys and, on Linux, each web view's GTK key events are watched too (<see cref="FromWebView"/>).
 /// </summary>
 public static class CommandPalette
 {
@@ -166,6 +172,8 @@ public static class CommandPalette
     {
         if (_installed) return;
         _installed = true;
+        // On macOS the monitor sees every key, Avalonia's included: listening to the windows as well would count each twice.
+        if (OperatingSystem.IsMacOS() && MacKeyMonitor.Start(OnMacKey)) return;
         InputElement.KeyDownEvent.AddClassHandler<Window>((w, e) => OnKey(w, e, down: true), RoutingStrategies.Tunnel, handledEventsToo: true);
         InputElement.KeyUpEvent.AddClassHandler<Window>((w, e) => OnKey(w, e, down: false), RoutingStrategies.Tunnel, handledEventsToo: true);
     }
@@ -188,6 +196,34 @@ public static class CommandPalette
         if (down ? key.Down(mod, now) : key.Up(mod, now)) Toggle(window, null);
     }
 
+    /// <summary>A key anywhere in the app on macOS (on the main thread). True swallows it: the shortcut that opens the palette.</summary>
+    private static bool OnMacKey(MacKeyMonitor.KeyEvent e)
+    {
+        var key = Current;
+        var now = Environment.TickCount64;
+        if (e.IsKey)
+        {
+            if (!e.Down) return false;
+            if (key.Gesture is not null && key.Matches(e.Name, e.Ctrl, e.Shift, e.Alt, e.Meta))
+            {
+                Dispatcher.UIThread.Post(() => ToggleOverActive());
+                return true;
+            }
+            key.Down(PaletteKey.Mod.None, now);
+            return false;
+        }
+        if (e.Down ? key.Down(e.Mod, now) : key.Up(e.Mod, now)) Dispatcher.UIThread.Post(() => ToggleOverActive());
+        return false;
+    }
+
+    /// <summary>Opens the palette over the window in front (the main one when none of ours is).</summary>
+    private static void ToggleOverActive()
+    {
+        var windows = (Avalonia.Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.Windows ?? [];
+        var owner = windows.FirstOrDefault(w => w.IsActive && w is not CommandPaletteWindow) ?? Ui.Main;
+        if (owner is not null) Toggle(owner, null); else _open?.Close();
+    }
+
     /// <summary>
     /// Feeds the keys typed into a web view (Linux, GTK) to the palette key. Called on the GLib thread; the result is
     /// handled on the UI thread.
@@ -200,13 +236,17 @@ public static class CommandPalette
             var key = Current;
             var window = TopLevel.GetTopLevel(web) as Window;
             if (window is null) return;
-            const uint shiftMask = 1, ctrlMask = 4, altMask = 8;
-            if (down && key.Gesture is not null && key.Matches(keyName, (state & ctrlMask) != 0, (state & shiftMask) != 0, (state & altMask) != 0))
+            const uint shiftMask = 1, ctrlMask = 4, altMask = 8, superMask = 1 << 26;
+            if (down && key.Gesture is not null && key.Matches(keyName, (state & ctrlMask) != 0, (state & shiftMask) != 0, (state & altMask) != 0, (state & superMask) != 0))
             {
                 Toggle(window, web);
                 return;
             }
-            var mod = keyval switch { 0xffe1 or 0xffe2 => PaletteKey.Mod.Shift, 0xffe3 or 0xffe4 => PaletteKey.Mod.Ctrl, 0xffe9 or 0xffea => PaletteKey.Mod.Alt, _ => PaletteKey.Mod.None };
+            var mod = keyval switch
+            {
+                0xffe1 or 0xffe2 => PaletteKey.Mod.Shift, 0xffe3 or 0xffe4 => PaletteKey.Mod.Ctrl, 0xffe9 or 0xffea => PaletteKey.Mod.Alt,
+                0xffeb or 0xffec => PaletteKey.Mod.Meta, _ => PaletteKey.Mod.None,
+            };
             if (down ? key.Down(mod, now) : key.Up(mod, now)) Toggle(window, web);
         });
     }

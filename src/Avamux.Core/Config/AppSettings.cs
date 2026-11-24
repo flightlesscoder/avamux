@@ -146,7 +146,7 @@ public sealed class UiSettings
     public bool TaskbarAlert { get; set; } = true;
     /// <summary>Key that swaps the window for the boss screen and back, e.g. Ctrl+Shift+B. Empty turns it off.</summary>
     public string BossKey { get; set; } = "Ctrl+Shift+B";
-    /// <summary>Opens the command palette from anywhere: a modifier pressed twice ("Shift Shift", "Ctrl Ctrl", "Alt Alt") or a shortcut such as Ctrl+Shift+P. Empty turns it off.</summary>
+    /// <summary>Opens the command palette from anywhere: a modifier pressed twice ("Shift Shift", "Ctrl Ctrl", "Alt Alt", "Cmd Cmd") or a shortcut such as Ctrl+Shift+P. Empty turns it off.</summary>
     public string CommandPaletteKey { get; set; } = "Shift Shift";
     /// <summary>What the boss screen pretends to be: spreadsheet or build.</summary>
     public string BossScreen { get; set; } = "spreadsheet";
