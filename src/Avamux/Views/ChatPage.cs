@@ -80,9 +80,10 @@ public sealed class ChatPage : UserControl, IPage
         };
 
         _folder = Ui.IconButton(Icons.FolderOpen, "The folder the agent works in", () => _ = ChooseFolderAsync(), "");
-        _provider.SelectionChanged += (_, _) => { if (!_loadingHeader && _provider.SelectedItem is ComboBoxItem { Tag: string id }) _ = ConfigureAsync(provider: id); };
-        _effort.SelectionChanged += (_, _) => { if (!_loadingHeader && _effort.SelectedItem is ComboBoxItem { Tag: string e }) _ = ConfigureAsync(effort: e); };
-        _model.SelectionChanged += (_, _) => { if (!_loadingHeader && _model.SelectedItem is ComboBoxItem { Tag: string m }) _ = ConfigureAsync(model: m); };
+        // The change is made after the dropdown has finished its own selection: the header is rebuilt by it.
+        _provider.SelectionChanged += (_, _) => { if (!_loadingHeader && _provider.SelectedItem is ComboBoxItem { Tag: string id }) Later(() => ConfigureAsync(provider: id)); };
+        _effort.SelectionChanged += (_, _) => { if (!_loadingHeader && _effort.SelectedItem is ComboBoxItem { Tag: string e }) Later(() => ConfigureAsync(effort: e)); };
+        _model.SelectionChanged += (_, _) => { if (!_loadingHeader && _model.SelectedItem is ComboBoxItem { Tag: string m }) Later(() => ConfigureAsync(model: m)); };
         _model.LostFocus += (_, _) => CommitTypedModel();
         _model.KeyDown += (_, e) => { if (e.Key == Key.Enter) { e.Handled = true; CommitTypedModel(); } };
         ToolTip.SetTip(_provider, "Provider (Settings → AI Chat sets them up)");
@@ -328,54 +329,83 @@ public sealed class ChatPage : UserControl, IPage
 
     private void RefreshHeader()
     {
+        var was = _loadingHeader;
         _loadingHeader = true;
         try
         {
             var chat = Current;
             var providerId = chat?.ProviderId ?? (App.Services.Config.Settings.Ai.ChatProvider is { Length: > 0 } p && Ai.Config(p) is not null ? p : Ai.Providers.FirstOrDefault()?.Id);
-            _provider.Items.Clear();
-            foreach (var info in Ai.Providers) _provider.Items.Add(new ComboBoxItem { Content = info.Name, Tag = info.Id });
-            _provider.SelectedItem = _provider.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag! == providerId);
+            SetItems(_provider, Ai.Providers.Select(i => (i.Name, i.Id, (string?)null)).ToList(), providerId);
             var config = providerId is null ? null : Ai.Config(providerId);
             var kind = config is null ? null : Ai.Kind(config.Kind);
-            _effort.Items.Clear();
-            _effort.Items.Add(new ComboBoxItem { Content = "Default effort", Tag = "" });
-            foreach (var level in kind?.Capabilities.EffortLevels ?? []) _effort.Items.Add(new ComboBoxItem { Content = level, Tag = level });
-            var effort = chat?.Effort ?? config?.Effort ?? "";
-            _effort.SelectedItem = _effort.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag! == effort) ?? _effort.Items[0];
+            var effort = chat?.Effort ?? _pendingEffort ?? config?.Effort ?? "";
+            SetItems(_effort, [("Default effort", "", null), .. (kind?.Capabilities.EffortLevels ?? []).Select(l => (l, l, (string?)null))], effort);
+            if (_effort.SelectedItem is null) _effort.SelectedIndex = 0;
             _effort.IsVisible = kind?.Capabilities.EffortLevels.Count > 0;
-            var model = chat?.Model ?? config?.Model ?? "";
-            _model.Items.Clear();
-            _model.Items.Add(new ComboBoxItem { Content = model.Length > 0 ? model : "Default model", Tag = model });
-            _model.SelectedIndex = 0;
+            var model = chat?.Model ?? _pendingModel ?? config?.Model ?? "";
+            // Until the provider's models are known, the one in use stands alone in the list.
+            if (_model.Items.OfType<ComboBoxItem>().All(i => (string)i.Tag! != model) || _modelsOf != providerId)
+                SetItems(_model, [(model.Length > 0 ? model : "Default model", model, null)], model);
+            else _model.SelectedItem = _model.Items.OfType<ComboBoxItem>().First(i => (string)i.Tag! == model);
             if (config is not null && kind is not null) _ = LoadModelsAsync(config, model);
-            var folder = chat?.Folder ?? Ai.DefaultFolder;
+            var folder = chat?.Folder ?? _pendingFolder ?? Ai.DefaultFolder;
             ((TextBlock)((StackPanel)_folder.Content!).Children.OfType<TextBlock>().FirstOrDefault()!)?.SetValue(TextBlock.TextProperty, System.IO.Path.GetFileName(folder.TrimEnd('/')));
             ToolTip.SetTip(_folder, "Works in " + folder + " (click to change)");
         }
-        finally { _loadingHeader = false; }
+        finally { _loadingHeader = was; }
     }
+
+    /// <summary>The provider whose models the model dropdown lists.</summary>
+    private string? _modelsOf;
+
+    /// <summary>
+    /// Fills a header dropdown and selects an item. The items are replaced only when they differ, and never while the
+    /// dropdown is handling a selection (callers run after it, see <see cref="Later"/>): Avalonia throws inside a
+    /// dropdown whose items are cleared then, and leaves it empty.
+    /// </summary>
+    private static void SetItems(ComboBox combo, IReadOnlyList<(string Label, string Tag, string? Tip)> items, string? selected)
+    {
+        var now = combo.Items.OfType<ComboBoxItem>().Select(i => (i.Content as string, i.Tag as string));
+        if (!now.SequenceEqual(items.Select(i => ((string?)i.Label, (string?)i.Tag))))
+        {
+            combo.SelectedItem = null;
+            combo.Items.Clear();
+            foreach (var (label, tag, tip) in items)
+                combo.Items.Add(Ui.Apply(new ComboBoxItem { Content = label, Tag = tag }, i => { if (tip is not null) ToolTip.SetTip(i, tip); }));
+        }
+        combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag! == selected);
+    }
+
+    /// <summary>Runs a header change once the event that asked for it is over, and says when it fails.</summary>
+    private void Later(Func<Task> work) => Dispatcher.UIThread.Post(async () =>
+    {
+        try { await work(); }
+        catch (Exception ex) { Ui.Toast(this, "AI Chat", ex.GetBaseException().Message); }
+    });
 
     private async Task LoadModelsAsync(AiProviderConfig config, string current)
     {
         var models = await Ai.ModelsAsync(config.Id);
-        if (Current?.ProviderId is { } shown && shown != config.Id) return;
+        if ((Current?.ProviderId ?? (_provider.SelectedItem as ComboBoxItem)?.Tag as string) is { } shown && shown != config.Id) return;
+        var was = _loadingHeader;
         _loadingHeader = true;
         try
         {
-            _model.Items.Clear();
-            foreach (var m in models) _model.Items.Add(Ui.Apply(new ComboBoxItem { Content = m.Name, Tag = m.Id }, i => { if (m.Note is { } n) ToolTip.SetTip(i, n); }));
-            if (current.Length > 0 && models.All(m => m.Id != current)) _model.Items.Add(new ComboBoxItem { Content = current, Tag = current });
-            _model.SelectedItem = _model.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag! == current) ?? _model.Items.OfType<ComboBoxItem>().FirstOrDefault();
+            var items = models.Select(m => (m.Name, m.Id, m.Note)).ToList();
+            if (current.Length > 0 && models.All(m => m.Id != current)) items.Add((current, current, null));
+            if (items.Count == 0) return;
+            SetItems(_model, items, current);
+            if (_model.SelectedItem is null) _model.SelectedIndex = 0;
+            _modelsOf = config.Id;
         }
-        finally { _loadingHeader = false; }
+        finally { _loadingHeader = was; }
     }
 
     private void CommitTypedModel()
     {
         var typed = (_model.Text ?? "").Trim();
         if (typed.Length == 0 || _model.Items.OfType<ComboBoxItem>().Any(i => i.Content as string == typed)) return;
-        _ = ConfigureAsync(model: typed);
+        Later(() => ConfigureAsync(model: typed));
     }
 
     private async Task ConfigureAsync(string? provider = null, string? model = null, string? effort = null, string? folder = null)
@@ -383,7 +413,12 @@ public sealed class ChatPage : UserControl, IPage
         if (_chatId is not { } id)
         {
             // No chat yet: the choice applies to the one the next message starts.
-            if (provider is not null) App.Services.Config.Set("ai.chatProvider", System.Text.Json.Nodes.JsonValue.Create(provider));
+            if (provider is not null)
+            {
+                App.Services.Config.Set("ai.chatProvider", System.Text.Json.Nodes.JsonValue.Create(provider));
+                // A model or effort picked for the last provider does not carry over to another.
+                _pendingModel = _pendingEffort = null;
+            }
             _pendingModel = model ?? _pendingModel;
             _pendingEffort = effort ?? _pendingEffort;
             _pendingFolder = folder ?? _pendingFolder;
