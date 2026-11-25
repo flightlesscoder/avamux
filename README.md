@@ -3,7 +3,7 @@
 Terminals, watches, events, a dashboard, logs, a wiki and git repositories in one Avalonia window, with a CLI
 that can do everything the window can. Runs on Linux and macOS.
 
-![The three-way merge tool](docs/screenshots/merge/02-three-way-view.png)
+![avamux: terminals with a browser pane, the wiki, Git Activity and the disk map, in three of its themes](docs/screenshots/avamux-overview.png)
 
 ## Build and run
 
