@@ -9,6 +9,8 @@ namespace Avamux.Core.Ai;
 public interface IAiChatHost
 {
     Task<string> OpenChatAsync(AiChatRequest request);
+    /// <summary>Shows an existing conversation in AI Chat.</summary>
+    Task ShowChatAsync(string chatId);
 }
 
 /// <summary>
@@ -179,6 +181,12 @@ public sealed class AiService : IAiService, IAsyncDisposable
     /// <summary>The working folder for AI: the setting, else the wiki.</summary>
     public string DefaultFolder => _app.Config.Settings.Ai.ChatFolder is { Length: > 0 } f ? ExpandHome(f) : _app.Wiki.Root;
 
+    /// <summary>
+    /// More environment variables for a session a provider starts, added by plugins (a provider's own setting of the
+    /// same variable wins). Each gets the provider and the model.
+    /// </summary>
+    public HookList<Func<AiProviderConfig, string?, IReadOnlyDictionary<string, string>?>> SessionEnvironment { get; } = new();
+
     /// <summary>Starts a conversation with a configured provider.</summary>
     public IAiSession Start(string providerId, string? model, string? effort, string? folder, string? systemPrompt = null,
         string? resume = null, bool fork = false, string? forkAt = null, bool noTools = false, bool ephemeral = false, string? stateDirectory = null)
@@ -186,6 +194,10 @@ public sealed class AiService : IAiService, IAsyncDisposable
         var config = GetConfig(providerId);
         if (!config.Enabled) throw new InvalidOperationException($"{config.Name} is switched off (Settings → AI Chat).");
         var kind = Kind(config.Kind) ?? throw new InvalidOperationException($"{config.Name} is a '{config.Kind}' provider, and nothing provides that kind (was its plugin switched off?).");
+        // Plugins may add variables a session needs (one that depends on the local server it talks to, say).
+        foreach (var env in SessionEnvironment.Each(h => h(config, string.IsNullOrWhiteSpace(model) ? config.Model : model), "ai"))
+            if (env is not null)
+                foreach (var (k, v) in env) config.Env.TryAdd(k, v);
         return kind.StartSession(new AiSessionOptions
         {
             Provider = config, Model = string.IsNullOrWhiteSpace(model) ? config.Model : model, Effort = string.IsNullOrWhiteSpace(effort) ? config.Effort : effort,
@@ -194,7 +206,65 @@ public sealed class AiService : IAiService, IAsyncDisposable
         });
     }
 
+    /// <summary>A one-off run (an AI Action, `avamux ai run`) in progress or recently finished, for AI Workloads.</summary>
+    public sealed class Run
+    {
+        public required string Id { get; init; }
+        public required string Label { get; init; }
+        public required string ProviderId { get; init; }
+        public string? Model { get; init; }
+        public DateTime Started { get; } = DateTime.Now;
+        public DateTime? Finished { get; set; }
+        public bool Ok { get; set; }
+        public string? Error { get; set; }
+        public StringBuilder Text { get; } = new();
+        public StringBuilder Thinking { get; } = new();
+        public string? Tool { get; set; }
+        public CancellationTokenSource Cts { get; init; } = new();
+    }
+
+    private readonly List<Run> _runs = [];
+    private int _runSeq;
+
+    /// <summary>Runs in progress, then the last few that finished (newest first).</summary>
+    public IReadOnlyList<Run> Runs { get { lock (_runs) return _runs.OrderBy(r => r.Finished is not null).ThenByDescending(r => r.Started).ToList(); } }
+
+    /// <summary>Stops a run in progress.</summary>
+    public bool CancelRun(string id)
+    {
+        Run? run;
+        lock (_runs) run = _runs.FirstOrDefault(r => r.Id == id && r.Finished is null);
+        run?.Cts.Cancel();
+        return run is not null;
+    }
+
     public async Task<AiRunResult> RunAsync(AiRunRequest request, Action<AiEvent>? onEvent = null, CancellationToken ct = default)
+    {
+        var label = request.Label ?? (request.Prompt.Split('\n', 2)[0] is var first && first.Length > 60 ? first[..60] + "…" : first);
+        var run = new Run { Id = "run-" + Interlocked.Increment(ref _runSeq), Label = label, ProviderId = request.ProviderId ?? DefaultProviderId ?? "", Model = request.Model, Cts = CancellationTokenSource.CreateLinkedTokenSource(ct) };
+        lock (_runs) { _runs.Add(run); var done = _runs.Where(r => r.Finished is not null).OrderBy(r => r.Finished).ToList(); for (var i = 0; i < done.Count - 20; i++) _runs.Remove(done[i]); }
+        try
+        {
+            var result = await RunCoreAsync(request, e =>
+            {
+                switch (e)
+                {
+                    case AiTextDelta d: lock (run.Text) run.Text.Append(d.Text); break;
+                    case AiThinkingDelta t: lock (run.Thinking) run.Thinking.Append(t.Text); break;
+                    case AiToolStarted ts: run.Tool = ts.Summary; break;
+                    case AiToolFinished: run.Tool = null; break;
+                }
+                onEvent?.Invoke(e);
+            }, run.Cts.Token);
+            run.Ok = result.Ok;
+            run.Error = run.Cts.IsCancellationRequested && !ct.IsCancellationRequested ? "Stopped from AI Workloads." : result.Error;
+            return result;
+        }
+        catch (Exception ex) { run.Error = ex.Message; throw; }
+        finally { run.Finished = DateTime.Now; }
+    }
+
+    private async Task<AiRunResult> RunCoreAsync(AiRunRequest request, Action<AiEvent>? onEvent, CancellationToken ct)
     {
         var providerId = request.ProviderId ?? DefaultProviderId;
         if (providerId is null) return new AiRunResult { Ok = false, Error = "No AI provider is set up. Add one under Settings → AI Chat." };

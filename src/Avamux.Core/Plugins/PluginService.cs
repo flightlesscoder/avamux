@@ -452,6 +452,12 @@ public sealed class PluginService
     /// <summary>AI provider kinds added by switched-on plugins.</summary>
     public List<IAiProvider> AiProviders() => Entries.Where(e => e.Context is not null).SelectMany(e => e.Context!.AiProviders).ToList();
 
+    /// <summary>Workload sources added by switched-on plugins.</summary>
+    public List<IWorkloadSource> WorkloadSources() => Entries.Where(e => e.Context is not null).SelectMany(e => e.Context!.WorkloadSources).ToList();
+
+    /// <summary>Lease providers added by switched-on plugins.</summary>
+    public List<IWorkloadLeaseProvider> LeaseProviders() => Entries.Where(e => e.Context is not null).SelectMany(e => e.Context!.LeaseProviders).ToList();
+
     internal void ContributionsChanged() => Changed?.Invoke();
 
     private void Save()
@@ -487,6 +493,8 @@ internal sealed class PluginContext : IPluginContext
 
     public List<IMenuContributor> MenuContributors { get; } = [];
     public List<IAiProvider> AiProviders { get; } = [];
+    public List<IWorkloadSource> WorkloadSources { get; } = [];
+    public List<IWorkloadLeaseProvider> LeaseProviders { get; } = [];
     public List<IWatchProvider> WatchProviders { get; } = [];
     public List<Func<object>> SettingsViews { get; } = [];
 
@@ -495,13 +503,15 @@ internal sealed class PluginContext : IPluginContext
         if (MenuContributors.Count > 0) yield return "menu items";
         if (WatchProviders.Count > 0) yield return "watch kinds: " + string.Join(", ", WatchProviders.Select(w => w.Kind));
         if (AiProviders.Count > 0) yield return "AI providers: " + string.Join(", ", AiProviders.Select(p => p.DisplayName));
+        if (WorkloadSources.Count > 0) yield return "workload sources: " + string.Join(", ", WorkloadSources.Select(w => w.Name));
+        if (LeaseProviders.Count > 0) yield return "leases: " + string.Join(", ", LeaseProviders.Select(w => w.Name));
         if (SettingsViews.Count > 0) yield return "settings";
     }
 
     public void RemoveAll()
     {
         foreach (var w in WatchProviders) _app.Watches.RemoveProvider(w);
-        MenuContributors.Clear(); AiProviders.Clear(); WatchProviders.Clear(); SettingsViews.Clear();
+        MenuContributors.Clear(); AiProviders.Clear(); WorkloadSources.Clear(); LeaseProviders.Clear(); WatchProviders.Clear(); SettingsViews.Clear();
         _app.Config.Changed -= _settingsChanged;
         _owner.Ui.ThemeChanged -= _themeChanged;
         SettingsChanged = null; ThemeChanged = null;
@@ -518,6 +528,8 @@ internal sealed class PluginContext : IPluginContext
     public void AddMenuItems(IMenuContributor contributor) { MenuContributors.Add(contributor); _owner.ContributionsChanged(); }
     public void AddWatchProvider(IWatchProvider provider) { WatchProviders.Add(provider); _app.Watches.AddProvider(provider); }
     public void AddAiProvider(IAiProvider provider) { AiProviders.Add(provider); _owner.ContributionsChanged(); }
+    public void AddWorkloadSource(IWorkloadSource source) { WorkloadSources.Add(source); _owner.ContributionsChanged(); }
+    public void AddLeaseProvider(IWorkloadLeaseProvider provider) { LeaseProviders.Add(provider); _owner.ContributionsChanged(); }
     public void AddSettingsView(Func<object> createView) => SettingsViews.Add(createView);
 
     public async Task<JsonNode?> CommandAsync(string name, JsonObject? args = null)

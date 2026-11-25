@@ -56,6 +56,8 @@ public sealed class AppServices : IAsyncDisposable
         Plugins = new PluginService(this);
         Ai = new AiService(this);
         Speech = new SpeechService(this);
+        Workloads = new Workloads.WorkloadService(this);
+        Workloads.Notice += (title, message) => Host.Notify(title, message);
         Commands = CommandRegistry.Build(this);
 
         // Theme sounds for the things worth hearing about.
@@ -106,6 +108,8 @@ public sealed class AppServices : IAsyncDisposable
     public AiService Ai { get; }
     /// <summary>Speaking replies aloud with Kokoro (off until switched on).</summary>
     public SpeechService Speech { get; }
+    /// <summary>AI Workloads: model servers, queue jobs, agents and tasks, profiles that start servers, models on disk.</summary>
+    public Workloads.WorkloadService Workloads { get; }
     public DashboardService Dashboard { get; }
     public CommandRegistry Commands { get; }
     public DateTime Started { get; } = DateTime.Now;
@@ -135,6 +139,7 @@ public sealed class AppServices : IAsyncDisposable
         Watches.Start();
         Events.Start();
         Tags.Start();
+        Workloads.Start();
     }
 
     public async ValueTask DisposeAsync()
@@ -145,6 +150,8 @@ public sealed class AppServices : IAsyncDisposable
         Step("plugins", Plugins.Stop);
         await Speech.DisposeAsync();
         Diagnostics.Timeline.Note("closed: speech");
+        await Workloads.DisposeAsync();
+        Diagnostics.Timeline.Note("closed: workloads");
         await Ai.DisposeAsync();
         Diagnostics.Timeline.Note("closed: ai");
         Step("disk scans", Disks.Dispose);

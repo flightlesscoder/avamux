@@ -48,6 +48,10 @@ public interface IPluginContext
     void AddWatchProvider(IWatchProvider provider);
     /// <summary>Adds a kind of AI provider, which can then be configured under Settings → AI Chat.</summary>
     void AddAiProvider(IAiProvider provider);
+    /// <summary>Adds a source of AI workloads (servers, queue jobs) to the AI Workloads page.</summary>
+    void AddWorkloadSource(IWorkloadSource source);
+    /// <summary>Adds something workload profiles can take a lease from before they start (see <see cref="IWorkloadLeaseProvider"/>).</summary>
+    void AddLeaseProvider(IWorkloadLeaseProvider provider);
     /// <summary>Adds a panel of the plugin's own settings, shown under the plugin in Settings → Plugins. The factory runs on the UI thread and returns an Avalonia Control.</summary>
     void AddSettingsView(Func<object> createView);
 

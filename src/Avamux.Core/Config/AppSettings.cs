@@ -191,8 +191,12 @@ public sealed class AiSettings
 {
     /// <summary>Show the AI Chat page in the navigation.</summary>
     public bool Chat { get; set; } = true;
-    /// <summary>Show the Workloads page in the navigation.</summary>
-    public bool Workloads { get; set; }
+    /// <summary>Show the AI Workloads page in the navigation.</summary>
+    public bool Workloads { get; set; } = true;
+    /// <summary>Folders of start-*.sh / stop-*.sh pairs that AI Workloads offers as profiles (comma separated).</summary>
+    public string WorkloadScripts { get; set; } = "";
+    /// <summary>Folders AI Workloads searches for model files, besides the usual places (comma separated).</summary>
+    public string WorkloadModels { get; set; } = "";
     /// <summary>The provider new chats start with (an id from Settings → AI Chat). Empty: the first one.</summary>
     public string ChatProvider { get; set; } = "";
     /// <summary>The agent's working folder for chats and actions. Empty: the wiki folder.</summary>

@@ -197,6 +197,34 @@ public static class Ui
         return result;
     }
 
+    /// <summary>A question with several answers; returns the index of the one chosen, or null when the window was closed.</summary>
+    /// <param name="body">Shown under the message (a list of what will happen), or null.</param>
+    public static async Task<int?> ChoiceAsync(Window owner, string title, string message, Control? body, params (string Label, bool Accent)[] choices)
+    {
+        int? result = null;
+        var dlg = new AppWindow
+        {
+            Title = title, SizeToContent = SizeToContent.WidthAndHeight, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = Tk("panel"),
+        };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
+        for (var i = 0; i < choices.Length; i++)
+        {
+            var index = i;
+            var b = new Button { Content = choices[i].Label, MinWidth = 80, HorizontalContentAlignment = HorizontalAlignment.Center, IsDefault = choices[i].Accent, IsCancel = i == 0 };
+            if (choices[i].Accent) b.Classes.Add("accent");
+            b.Click += (_, _) => { result = index; dlg.Close(); };
+            buttons.Children.Add(b);
+        }
+        var panel = new StackPanel { Margin = new Thickness(18), Spacing = 14, MaxWidth = 520 };
+        panel.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap });
+        if (body is not null) panel.Children.Add(body);
+        panel.Children.Add(buttons);
+        dlg.Body = panel;
+        await dlg.ShowDialog(owner);
+        return result;
+    }
+
     public static Window Owner(Control c) => (Window)TopLevel.GetTopLevel(c)!;
 
     public static MainWindow? Main => (Application.Current?.ApplicationLifetime as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)?.MainWindow as MainWindow;

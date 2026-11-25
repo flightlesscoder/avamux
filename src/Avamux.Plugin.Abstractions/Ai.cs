@@ -172,6 +172,8 @@ public sealed record AiProviderInfo(string Id, string Name, string Kind, string 
 public sealed class AiRunRequest
 {
     public required string Prompt { get; init; }
+    /// <summary>What the run is for, shown on the AI Workloads page ("Summarize"); null shows the prompt's start.</summary>
+    public string? Label { get; init; }
     /// <summary>A configured provider's id; null uses the AI Actions default.</summary>
     public string? ProviderId { get; init; }
     public string? Model { get; init; }

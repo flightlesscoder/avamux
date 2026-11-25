@@ -201,6 +201,7 @@ public sealed partial class CommandRegistry
         r.AddPageCommands(s!);
         r.AddPluginCommands(s!);
         r.AddAiCommands(s!);
+        r.AddWorkloadCommands(s!);
         return r;
     }
 }

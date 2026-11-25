@@ -52,7 +52,7 @@ Linux needs WebKitGTK 4.1 (`libwebkit2gtk-4.1`). macOS uses the system WKWebView
 | C# Interactive | A C# prompt that runs inside the running avamux, next to a screen of live controls built from XAML and from the C# you type. See [C# Interactive](#c-interactive). |
 | Caffeine | Keeps the computer awake until you turn it off, for a while (15 minutes to 8 hours, a length such as `1h30m`, or until a clock time), or while terminals are busy. See [Caffeine](#caffeine). |
 | AI Chat | Conversations with coding agents: Claude Code, pi, and other agent command lines. Several chats, each with its own provider, model, effort and working folder; the model's thinking and tool calls; how full the context is; pictures and files pasted or dropped in; copy, edit (a message, sending it again as a new version, or a reply's text), speak (Kokoro) and insert into the wiki. See [AI Chat](#ai-chat). |
-| Workloads | A placeholder, shown when switched on under Settings → AI Chat. |
+| AI Workloads | Every model server, coding agent, queue job and AI task on this computer (and other machines plugins reach): start, stop and swap model servers, read their logs and why they failed, and the models on disk. See [AI Workloads](#ai-workloads). |
 | Your own | Pages you add under Settings → Custom pages: a terminal running one command, a web page, or a .NET plugin. See [Custom pages](#custom-pages). |
 
 ## Themes
@@ -503,6 +503,52 @@ up. Point `ai.tts.python` at a Python that has `kokoro_onnx` installed and `ai.t
 model and voices files (for example in `~/avamux.local.json`); `ai.tts.voice` picks the voice (`af_nova`), and
 `ai.tts.autoSpeak` reads every reply as it is written. A small helper keeps the model loaded and unloads it after
 `ai.tts.idleMinutes` (10) without speaking; switching `ai.tts.enabled` off, or quitting, ends it and anything playing.
+
+## AI Workloads
+
+AI Workloads is where everything that runs models or AI work shows up, whoever started it, and where avamux acts as
+the admin: it can stop anything it can see (asking first when it did not start it), start and swap model servers,
+and say why one failed.
+
+- **Running**: llama.cpp servers (and RPC servers, whisper.cpp, Ollama and its loaded models, LM Studio, vLLM,
+  Kokoro …), coding agents (Claude Code, pi: in avamux terminals, in AI Chat, anywhere), and AI containers, with their
+  port, context, GPU and RAM use, how long they have run and who started them. Open a row for its details and its log
+  (a server's log, a start script's output, an AI run's thinking and reply), followed live.
+- **Profiles** are ways to start a server: a **llama.cpp** server avamux launches itself (program, model, alias, port,
+  context, any other arguments); a **start/stop script pair** found in the folders named by `ai.workloadScripts` (the
+  script is the config: its `BIN`, `MODEL`, `PORT`, `CTX`, `ALIAS`, pid and log files are read from it and the files it
+  sources); any **command**; a remote llama.cpp **RPC server** (status, start, stop, restart and version commands, for
+  example over ssh); a hosted **API** (best effort; the key stays in an environment variable).
+- **Swapping**: profiles in one group (servers on this computer are in `gpu`) never run together, so starting one
+  first stops what holds the GPU or its port, and says so first, refusing while that one is answering a request
+  unless you insist. It also names other programs holding GPU memory (a game), and warns when a server is left with
+  less than 800 MiB of the card. Servers avamux starts keep running when it quits; closing the window asks whether to
+  stop them.
+- **Why it failed**: the end of the log, read for the usual reasons (out of GPU memory, port in use, RPC built from
+  another commit, a missing library or model, an unknown architecture) in plain words.
+- **Tasks and jobs**: AI Chat replies and AI Actions in progress (stop them, or open the chat), recent runs and how
+  they ended, and jobs from queue plugins.
+- **Models on disk**: GGUF files (split ones counted once) with what their header says (architecture, size,
+  quantisation, context, layers, experts), plus safetensors, ONNX and whisper.cpp files, which profiles use each, and a
+  button that makes a llama.cpp profile from one. Searched in the usual places and `ai.workloadModels`.
+- **Plugins** add sources (`IWorkloadSource`: another machine's queue, its models and jobs) and leases
+  (`IWorkloadLeaseProvider`): a profile, or an RPC server it uses, can need a lease from another machine's queue before
+  it starts; it is released when the server stops, and losing it stops the server. A plugin can also teach AI Workloads
+  about a setup of its own (through `AppServices`): how its start scripts keep their settings
+  (`Workloads.ScriptConventions`), programs to recognise (`ProcessScanner.Recognisers`), container names
+  (`Workloads.ContainerPatterns`), something to do after a server starts (`Workloads.StartHooks`), which local server an
+  AI Chat provider talks to (`Workloads.EndpointResolvers`: a chat whose server is not answering then shows a bar that
+  starts a profile for that port), and variables its sessions need (`Ai.SessionEnvironment`).
+
+```sh
+avamux ai workloads list                 # what runs now (--all: stopped profiles, finished tasks too)
+avamux ai workloads profiles             # and: profile show|add|set|remove, folders
+avamux ai workloads swap my-model --ctx 65536   # stops what is in the way, waits until it answers
+avamux ai workloads logs local:profile:script:my-model
+avamux ai workloads stop local:pid:12345 # anything listed, stopped its own way
+avamux ai workloads models               # model files, with which profiles use them
+avamux app nav workloads:models          # open a tab (running, profiles, tasks, models)
+```
 
 ## AI Actions
 

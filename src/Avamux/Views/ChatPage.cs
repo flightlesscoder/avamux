@@ -28,6 +28,14 @@ public sealed class ChatPage : UserControl, IPage
     private readonly ComboBox _provider = new() { MinWidth = 140 };
     private readonly ComboBox _model = new() { MinWidth = 150, IsEditable = true };
     private readonly ComboBox _effort = new() { MinWidth = 100 };
+    // The model server a pi chat talks to, when it is not running: what to start (AI Workloads profiles on its port).
+    private readonly Border _serverBar = new() { IsVisible = false, Padding = new Thickness(18, 8), BorderThickness = new Thickness(0, 1, 0, 0) };
+    private readonly TextBlock _serverText = new() { FontSize = 12.5, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+    private readonly ComboBox _serverProfiles = new() { MinWidth = 220, FontSize = 12.5 };
+    private readonly Button _serverStart = new() { Content = "Start", Padding = new Thickness(12, 4), FontSize = 12.5 };
+    private readonly DispatcherTimer _serverTimer = new() { Interval = TimeSpan.FromSeconds(15) };
+    private bool _serverChecking, _serverStarting;
+    private Action? _serverSoon;
     private readonly Button _folder;
     private readonly ContextRing _ring = new();
     private readonly ScrollViewer _scroll = new() { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
@@ -135,12 +143,29 @@ public sealed class ChatPage : UserControl, IPage
             },
         };
 
+        _serverBar.BorderBrush = Ui.Line;
+        _serverBar.Background = Ui.Tk("panel");
+        _serverStart.Classes.Add("accent");
+        _serverStart.Click += (_, _) => _ = StartServerAsync();
+        _serverBar.Child = new DockPanel
+        {
+            Children =
+            {
+                Ui.Row(6, _serverProfiles, _serverStart, Ui.Link("AI Workloads", () => App.Services.Host.Navigate("workloads:profiles"), "See and manage every model server")).Dock(Dock.Right),
+                Ui.Row(8, new PathIcon { Data = Icons.AlertCircle, Width = 14, Height = 14, Foreground = Ui.Tk("warn") }, _serverText),
+            },
+        };
+        _serverTimer.Tick += (_, _) => CheckServer();
+        AttachedToVisualTree += (_, _) => _serverTimer.Start();
+        DetachedFromVisualTree += (_, _) => _serverTimer.Stop();
+
         var right = new DockPanel
         {
             Children =
             {
                 header.Dock(Dock.Top),
                 composer.Dock(Dock.Bottom),
+                _serverBar.Dock(Dock.Bottom),
                 _cards.Dock(Dock.Bottom),
                 new Panel { Children = { _scroll, _empty } },
             },
@@ -348,8 +373,52 @@ public sealed class ChatPage : UserControl, IPage
             ((TextBlock)((StackPanel)_folder.Content!).Children.OfType<TextBlock>().FirstOrDefault()!)?.SetValue(TextBlock.TextProperty, System.IO.Path.GetFileName(folder.TrimEnd('/')));
             ToolTip.SetTip(_folder, "Works in " + folder + " (click to change)");
             if (chat is null) UpdateEmpty();
+            (_serverSoon ??= Ui.Debounced(CheckServer, 300))();
         }
         finally { _loadingHeader = was; }
+    }
+
+    // ---- the model server a pi chat needs ----
+
+    /// <summary>Whether the local server the chosen pi provider and model talk to answers; when not, a bar offers to start one.</summary>
+    private void CheckServer()
+    {
+        if (_serverChecking || _serverStarting || !IsEffectivelyVisible) return;
+        var providerId = _provider.SelectedItem is ComboBoxItem { Tag: string p } ? p : null;
+        var config = providerId is null ? null : Ai.Config(providerId);
+        var model = _model.SelectedItem is ComboBoxItem { Tag: string m } ? m : config?.Model;
+        if (config is null) { _serverBar.IsVisible = false; return; }
+        _serverChecking = true;
+        Task.Run(() => App.Services.Workloads.CheckEndpointAsync(config, model)).ContinueWith(t => Dispatcher.UIThread.Post(() =>
+        {
+            _serverChecking = false;
+            var check = t.IsCompletedSuccessfully ? t.Result : null;
+            if (check is null || check.Answering) { _serverBar.IsVisible = false; return; }
+            var whose = check.Name is { Length: > 0 } name ? $"{config.Name}'s provider {name}" : config.Name;
+            _serverText.Text = check.Profiles.Count > 0
+                ? $"Nothing answers on port {check.Port} ({whose}). Start a model server there:"
+                : $"Nothing answers on port {check.Port} ({whose}), and no profile in AI Workloads serves that port.";
+            var keep = _serverProfiles.SelectedItem is ComboBoxItem { Tag: string sel } && check.Profiles.Any(p => p.Id == sel) ? sel : check.Profiles.FirstOrDefault()?.Id;
+            _serverProfiles.ItemsSource = check.Profiles.Select(p => new ComboBoxItem { Content = p.Name + (p.Context > 0 ? $" · {p.Context / 1024}K" : ""), Tag = p.Id }).ToList();
+            _serverProfiles.SelectedItem = _serverProfiles.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag! == keep);
+            _serverProfiles.IsVisible = _serverStart.IsVisible = check.Profiles.Count > 0;
+            _serverBar.IsVisible = true;
+        }));
+    }
+
+    private async Task StartServerAsync()
+    {
+        if (_serverProfiles.SelectedItem is not ComboBoxItem { Tag: string id } || App.Services.Workloads.Profile(id) is not { } profile) return;
+        _serverStarting = true;
+        _serverStart.IsEnabled = false;
+        _serverText.Text = $"Starting {profile.Name}…";
+        try { await WorkloadsPage.StartProfileAsync(this, profile, askContext: false); }
+        finally
+        {
+            _serverStarting = false;
+            _serverStart.IsEnabled = true;
+            CheckServer();
+        }
     }
 
     /// <summary>What a new chat will use, as the header's dropdowns and folder show it, before the first message.</summary>
@@ -757,5 +826,11 @@ public sealed class AppChatHost(MainWindow window) : IAiChatHost
         window.Navigate("chat");
         var page = window.Page<ChatPage>("chat") ?? throw new InvalidOperationException("AI Chat is not available.");
         return page.OpenNew(request);
+    }).GetTask();
+
+    public Task ShowChatAsync(string chatId) => Dispatcher.UIThread.InvokeAsync(() =>
+    {
+        window.Navigate("chat");
+        window.Page<ChatPage>("chat")?.Open(chatId);
     }).GetTask();
 }

@@ -9,9 +9,9 @@ namespace Avamux.UiTests;
 /// <summary>
 /// The phase 1 acceptance test for Do Research…: asked "When was avamux browser script injection supposed to happen
 /// for cross-origin iframes?", the agent finds "pre-navigation" in the 2026-11-19 daily note. Runs only with
-/// AVAMUX_AI_TESTS=1, on a copy of the wiki (AVAMUX_RESEARCH_WIKI, else the real one; it is only ever copied).
-/// pi needs a model server: AVAMUX_PI_RESEARCH_START / AVAMUX_PI_RESEARCH_STOP start and stop one (only when nothing
-/// answers on AVAMUX_PI_TEST_PORT, default 8080).
+/// AVAMUX_AI_TESTS=1, on a small wiki the test writes (or a copy of AVAMUX_RESEARCH_WIKI, which must hold that note;
+/// it is only ever copied). pi needs a model server: AVAMUX_PI_RESEARCH_START / AVAMUX_PI_RESEARCH_STOP start and stop
+/// one (only when nothing answers on AVAMUX_PI_TEST_PORT, default 8080).
 /// </summary>
 [Trait("Category", "AiLive")]
 public class ResearchAcceptanceTests
@@ -19,11 +19,27 @@ public class ResearchAcceptanceTests
     private const string Question = "When was avamux browser script injection supposed to happen for cross-origin iframes?";
     private static bool On => Environment.GetEnvironmentVariable("AVAMUX_AI_TESTS") is "1" or "true" or "yes";
 
+    /// <summary>A few pages, the answer in one daily note and the topic named in others.</summary>
+    private static readonly Dictionary<string, string> Pages = new()
+    {
+        ["Projects/Avamux.md"] = "# Avamux\n\nNotes on the #avamux/browser panes and #ideas for the wiki. Decisions are in the daily notes.\n",
+        ["Ideas.md"] = "# Ideas\n\n- A command palette.\n- Browser panes beside terminals.\n",
+        ["Daily/2026-11-18 Wednesday.md"] = "# 2026-11-18\n\n- Wiki tags: a Tags view beside the folder tree.\n- Browser panes: keep the address bar out of the way.\n",
+        ["Daily/2026-11-19 Thursday.md"] = "# 2026-11-19\n\n## Browser panes\n\n- Script injection for cross-origin iframes should happen **pre-navigation**, so a page's own scripts never run first.\n- Same-origin frames can keep injecting after load.\n",
+    };
+
     private static string CopyWiki(string root)
     {
-        var source = Environment.GetEnvironmentVariable("AVAMUX_RESEARCH_WIKI") is { Length: > 0 } s ? s
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "avamux", "wiki");
         var target = Path.Combine(root, "data", "wiki");
+        if (Environment.GetEnvironmentVariable("AVAMUX_RESEARCH_WIKI") is not { Length: > 0 } source)
+        {
+            foreach (var (page, text) in Pages)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(target, page))!);
+                File.WriteAllText(Path.Combine(target, page), text);
+            }
+            return target;
+        }
         foreach (var dir in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories).Where(d => !d.Contains("/.git")))
             Directory.CreateDirectory(Path.Combine(target, Path.GetRelativePath(source, dir)));
         Directory.CreateDirectory(target);

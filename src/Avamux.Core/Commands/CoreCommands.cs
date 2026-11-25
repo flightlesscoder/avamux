@@ -132,13 +132,15 @@ public sealed partial class CommandRegistry
             ["repositories"] = s.Repos.Items.Count,
             ["webServer"] = s.Web.BaseUrl,
         });
-        Add("app nav", $"Switch the window to a page: {string.Join(", ", Pages)}, or the name of a custom page.", [P("page", "Page name.", true)], a =>
+        Add("app nav", $"Switch the window to a page: {string.Join(", ", Pages)}, or the name of a custom page. Some pages take a part after a colon (workloads:models).", [P("page", "Page name.", true)], a =>
         {
             // A custom page (see `avamux page list`) is found by its exact name or key; built-in pages by a prefix.
             if (s.Nav.Find(a.Require("page")) is { Enabled: true } custom) { s.Host.Navigate(custom.Key); return custom.Name; }
-            var page = Pages.FirstOrDefault(p => p.StartsWith(a.Require("page"), StringComparison.OrdinalIgnoreCase))
+            // "page:part" opens a part of a page that has them (workloads:models, workloads:running:<workload id>).
+            var parts = a.Require("page").Split(':', 2);
+            var page = Pages.FirstOrDefault(p => p.StartsWith(parts[0], StringComparison.OrdinalIgnoreCase))
                 ?? throw new ArgumentException($"Unknown page '{a.Str("page")}'. Pages: {string.Join(", ", Pages.Concat(s.Nav.Pages.Where(p => p.Enabled).Select(p => p.Name)))}.");
-            s.Host.Navigate(page);
+            s.Host.Navigate(parts.Length > 1 ? page + ":" + parts[1] : page);
             return page;
         });
         Add("app boss", "Show the boss screen (or hide it again).", [F("off", "Hide it."), F("on", "Show it.")], a =>

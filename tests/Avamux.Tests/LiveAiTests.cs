@@ -12,7 +12,7 @@ namespace Avamux.Tests;
 /// <item>AVAMUX_PI_TEST_START / AVAMUX_PI_TEST_STOP: scripts that start and stop a local model server for pi (the tests
 /// start it only when nothing answers on the port, and stop only what they started).</item>
 /// <item>AVAMUX_PI_TEST_PORT (default 8080), AVAMUX_PI_TEST_MODEL (default: pi's own default model).</item>
-/// <item>AVAMUX_RESEARCH_WIKI: a wiki folder to copy for the research test (default: the real one; it is only ever copied).</item>
+/// <item>AVAMUX_RESEARCH_WIKI: a wiki folder to copy for the research test (default: a small one the test writes).</item>
 /// </list>
 /// </summary>
 public sealed class LiveAiFactAttribute : FactAttribute

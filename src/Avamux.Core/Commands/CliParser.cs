@@ -28,7 +28,7 @@ public static class CliParser
         // Longest command name that matches the leading words ("terminal new", "dashboard source add").
         CommandDef? def = null;
         var used = 0;
-        for (var n = Math.Min(3, args.Count); n >= 1; n--)
+        for (var n = Math.Min(4, args.Count); n >= 1; n--)
         {
             def = registry.Find(string.Join(' ', args.Take(n)));
             if (def is not null) { used = n; break; }
@@ -197,6 +197,7 @@ public static class CliParser
                 return sb.ToString().TrimEnd();
             }
             case JsonArray arr when arr.All(x => x is JsonValue): return string.Join('\n', arr.Select(x => Format(x)));
+            case JsonObject { Count: 0 }: return "(none)";
             case JsonObject o when o.All(p => p.Value is null or JsonValue):
             {
                 var w = o.Max(p => p.Key.Length);

@@ -283,6 +283,18 @@ public sealed class ChatService : IAsyncDisposable
 
     public bool IsBusy(string chatId) { lock (_gate) return _live.TryGetValue(chatId, out var l) && l.Session.IsBusy; }
 
+    /// <summary>A chat writing a reply now.</summary>
+    /// <param name="Waiting">Questions or permission requests it waits on.</param>
+    public sealed record BusyChat(AiChat Chat, AiChatMessage? Writing, DateTime? ThinkingSince, int Waiting);
+
+    /// <summary>The chats writing a reply now (for AI Workloads).</summary>
+    public IReadOnlyList<BusyChat> Busy()
+    {
+        lock (_gate)
+            return _live.Where(kv => kv.Value.Session.IsBusy && _chats.ContainsKey(kv.Key))
+                .Select(kv => new BusyChat(_chats[kv.Key], kv.Value.Writing, kv.Value.ThinkingSince, kv.Value.Requests.Count)).ToList();
+    }
+
     /// <summary>The questions and permission requests a chat waits on.</summary>
     public IReadOnlyList<PendingRequest> Requests(string chatId)
     {
