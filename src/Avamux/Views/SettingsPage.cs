@@ -29,6 +29,7 @@ public sealed class SettingsPage : UserControl, IPage
         ["terminal.crt"] = ("CRT monitor effect", "Scanlines, softly glowing text and darkened corners over the terminal, like an old monitor."),
         ["terminal.crtIntensity"] = ("CRT strength", "0 to 100. Lower is subtler and easier to read."),
         ["terminal.crtFlicker"] = ("CRT flicker", "A faint, slow flicker of the screen."),
+        ["terminal.crtGlow"] = ("CRT text glow", "fast: a soft halo over all the text. colour: every character glows in its own colour, but drawing is several times slower (nvim and other full-screen programs lag). off: no glow."),
         ["terminal.cursorPulse"] = ("Heartbeat cursor", "The cursor beats like a pulse with a soft neon glow instead of blinking."),
         ["terminal.cursorPulseShape"] = ("Heartbeat cursor shape", "block is filled, outline is hollow, bar is a thin line."),
         ["terminal.cursorPulseColor"] = ("Heartbeat cursor colour", "Empty follows the theme's accent."),
@@ -139,6 +140,7 @@ public sealed class SettingsPage : UserControl, IPage
         ["theme.windowChrome"] = ["auto", "system", "custom"],
         ["theme.soundSet"] = ["theme", .. SoundService.Sets],
         ["terminal.cursorPulseShape"] = ["block", "outline", "bar"],
+        ["terminal.crtGlow"] = ["fast", "colour", "off"],
     };
 
     private static bool IsColor(string key) => key is "theme.accent" or "theme.glowColor" or "terminal.background" or "terminal.foreground" or "terminal.cursorPulseColor" || key.StartsWith("events.", StringComparison.Ordinal) && key.EndsWith("Color", StringComparison.Ordinal);

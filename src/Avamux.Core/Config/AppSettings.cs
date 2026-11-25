@@ -46,6 +46,12 @@ public sealed class TerminalSettings
     public int CrtIntensity { get; set; } = 50;
     /// <summary>A faint flicker, like a tube that is not quite steady.</summary>
     public bool CrtFlicker { get; set; }
+    /// <summary>
+    /// The CRT effect's text glow. fast: one soft halo over the whole text, in the foreground colour. colour: each
+    /// character glows in its own colour, which the web view has to blur glyph by glyph on the CPU: several times
+    /// slower to draw (full-screen programs such as nvim lag). off: no glow.
+    /// </summary>
+    public string CrtGlow { get; set; } = "fast";
     public bool CloseTabOnExit { get; set; } = true;
     /// <summary>Save the scrollback of a terminal to the Logs page when it ends.</summary>
     public bool PreserveDeadSessions { get; set; } = true;

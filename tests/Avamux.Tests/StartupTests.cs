@@ -189,6 +189,44 @@ public class StartupTests(ITestOutputHelper output)
         Check($"first wiki page rendered, wiki of {count} files", rendered, budgetMs: 4000, note: "the folder tree lists them as the page opens");
     }
 
+    // ---- terminal output ----
+
+    /// <summary>
+    /// A program pouring out output (like `find /` or `yes`) must not run ahead of the view: when it does, megabytes
+    /// queue up, and after Ctrl+C the screen keeps scrolling for seconds although the program has already stopped.
+    /// Measured with the CRT effect on, the heaviest view to draw.
+    /// </summary>
+    [StartupFact]
+    public void A_flood_of_output_stops_on_screen_soon_after_ctrl_c()
+    {
+        var behind = new List<double>();
+        var stopped = new List<double>();
+        for (var run = 0; run < Runs; run++)
+        {
+            using var app = new AppRun();
+            app.Settings(new JsonObject { ["terminal"] = new JsonObject { ["crt"] = true, ["cursorPulse"] = true } });
+            app.Start();
+            app.WaitUntilAnswering();
+            var id = "";
+            app.WaitFor("a terminal tab", () => (id = (app.Send("terminal list") as JsonArray)?.FirstOrDefault()?["id"]?.GetValue<string>() ?? "") != "");
+            app.WaitForMark("terminal view ready");
+            // The program ignores Ctrl+C itself and says when the one producing the output (which does not) has ended.
+            app.Send("terminal send", new JsonObject { ["id"] = id, ["enter"] = true, ["text"] =
+                "python3 -c \"import signal,subprocess; signal.signal(signal.SIGINT, signal.SIG_IGN); " +
+                "p=subprocess.Popen(['yes','avamux flood test line, long enough to fill a good part of the row'], preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL)); " +
+                "p.wait(); print('flood' + '-over')\"" });
+            Thread.Sleep(2000);
+            behind.Add((app.Send("terminal stats", new JsonObject { ["id"] = id })?["behind"]?.GetValue<double>() ?? -1) / 1024);
+            var sent = app.SinceLaunch.Elapsed.TotalMilliseconds;
+            app.Send("terminal send", new JsonObject { ["id"] = id, ["text"] = "^C", ["keys"] = true });
+            var shown = app.WaitFor("the end of the flood on screen",
+                () => (app.Send("terminal read", new JsonObject { ["id"] = id, ["lines"] = 3 })?.ToString() ?? "").Contains("flood-over"), timeoutMs: 60_000);
+            stopped.Add(shown - sent);
+        }
+        Note("output waiting to be shown, 2 s into the flood", behind.Max(), "KB", limit: 2048);
+        Check("Ctrl+C until the flood stops on screen", stopped, budgetMs: 1500, note: "CRT effect on; the view acknowledges what it has shown and the program waits for it");
+    }
+
     // ---- the command line and a second start ----
 
     [StartupFact]

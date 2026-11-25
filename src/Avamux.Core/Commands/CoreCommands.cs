@@ -286,6 +286,18 @@ public sealed partial class CommandRegistry
             if (a.Int("lines") is { } n) text = string.Join('\n', text.Split('\n').TakeLast(n));
             return text;
         });
+        Add("terminal stats", "What a terminal's view is doing: output received and shown, how far behind it is, and how long recent key presses took to reach the screen.",
+            [P("id", "Terminal id or name.", true)], async a =>
+        {
+            var t = s.Terminals.Get(a.Require("id"));
+            var o = await s.Web.ViewStatsAsync(t.Id) ?? throw new InvalidOperationException("No view is showing this terminal.");
+            if (o["keyLatencyMs"] is JsonArray lat && lat.Count > 0)
+            {
+                var ms = lat.Select(x => x!.GetValue<double>()).Order().ToList();
+                o["keyLatency"] = new JsonObject { ["count"] = ms.Count, ["median"] = ms[ms.Count / 2], ["p90"] = ms[(int)(ms.Count * 0.9)], ["max"] = ms[^1] };
+            }
+            return o;
+        });
         Add("terminal resize", "Set the size of a terminal that has no visible tab (the tab view otherwise controls it).",
             [P("id", "Terminal id or name.", true), P("cols", "Columns.", true), P("rows", "Rows.", true)], a =>
         {

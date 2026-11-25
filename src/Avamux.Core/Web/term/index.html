@@ -67,7 +67,11 @@
   #crt { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; pointer-events: none; display: none; }
   .crt-on #crt { display: block; }
   .crt-on.crt-flicker #crt { animation: avamux-flicker 5s steps(1) infinite; }
-  .crt-on .xterm-rows { text-shadow: 0 0 calc(var(--ci) * 5px) currentColor; }
+  /* The glow. A text-shadow blurs every glyph on its own, on the CPU, on every frame of output: with it a key press in
+     nvim took 600 ms to show instead of 33. One drop-shadow over the whole text layer costs a single blur (about
+     40 ms), but it glows in one colour, the foreground's. The per-glyph one stays as the "colour" choice. */
+  .crt-glow:not(.flooding) .xterm-rows { filter: drop-shadow(0 0 calc(var(--ci) * 6px) currentColor); }
+  .crt-glow-colour .xterm-rows { text-shadow: 0 0 calc(var(--ci) * 5px) currentColor; }
   @keyframes avamux-flicker { 0%, 100% { opacity: 1; } 7% { opacity: .93; } 8% { opacity: 1; } 52% { opacity: .96; } 53% { opacity: 1; } 81% { opacity: .92; } 82% { opacity: 1; } }
   .xterm-viewport::-webkit-scrollbar { width: 10px; }
   .xterm-viewport::-webkit-scrollbar-thumb { background: var(--line, #3b4252); border-radius: 5px; }
