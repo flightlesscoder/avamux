@@ -119,6 +119,40 @@ public class CliTests
     }
 
     [Fact]
+    public void A_command_named_help_is_that_command()
+    {
+        var r = CliParser.Parse(Registry, ["theme", "help"]);
+        Assert.False(r.Help);
+        Assert.Equal("theme help", r.Command!.Name);
+        Assert.True(CliParser.Parse(Registry, ["theme", "help", "--help"]).Help);
+    }
+
+    [Fact]
+    public void Help_as_a_plain_word_is_an_argument_unless_it_stands_alone()
+    {
+        var search = CliParser.Parse(Registry, ["wiki", "search", "need", "help"]);
+        Assert.False(search.Help);
+        Assert.Equal(["need", "help"], new Args(search.Args).List("query"));
+
+        var send = CliParser.Parse(Registry, ["terminal", "send", "build", "?"]);
+        Assert.False(send.Help);
+        Assert.Equal(["?"], new Args(send.Args).List("text"));
+
+        // After "--" even the word alone is an argument.
+        var literal = CliParser.Parse(Registry, ["wiki", "search", "--", "help"]);
+        Assert.False(literal.Help);
+        Assert.Equal(["help"], new Args(literal.Args).List("query"));
+
+        // Spelled as an option it still asks for help anywhere.
+        Assert.True(CliParser.Parse(Registry, ["wiki", "search", "need", "--help"]).Help);
+
+        // Before the command, it is help for that command.
+        var before = CliParser.Parse(Registry, ["help", "terminal", "new"]);
+        Assert.True(before.Help);
+        Assert.Equal("terminal new", before.HelpTopic);
+    }
+
+    [Fact]
     public void Help_text_lists_every_group()
     {
         var help = CliParser.Help(Registry, null);

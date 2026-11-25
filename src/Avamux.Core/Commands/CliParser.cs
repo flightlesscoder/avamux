@@ -8,20 +8,29 @@ public sealed record CliParseResult(CommandDef? Command, JsonObject Args, bool H
 /// <summary>Turns `avamux terminal new --name build -- htop` into a command name plus JSON arguments.</summary>
 public static class CliParser
 {
-    private static readonly HashSet<string> HelpWords = new(StringComparer.OrdinalIgnoreCase)
-        { "/?", "-?", "--?", "/h", "-h", "/help", "-help", "--help", "help", "?" };
+    /// <summary>Help spelled as an option: asks for help wherever it stands (before a literal "--").</summary>
+    private static readonly HashSet<string> HelpOptions = new(StringComparer.OrdinalIgnoreCase)
+        { "/?", "-?", "--?", "/h", "-h", "/help", "-help", "--help" };
 
-    public static bool IsHelp(string arg) => HelpWords.Contains(arg);
+    /// <summary>
+    /// Help spelled as a plain word: asks for help only where a command word would go (alone, after a group, or as a
+    /// command's only argument). Anywhere else it is an argument (`wiki search release help`), and a command whose name
+    /// has it (`theme help`) is that command.
+    /// </summary>
+    private static readonly HashSet<string> HelpWords = new(StringComparer.OrdinalIgnoreCase) { "help", "?" };
+
+    public static bool IsHelp(string arg) => HelpOptions.Contains(arg) || HelpWords.Contains(arg);
 
     public static CliParseResult Parse(CommandRegistry registry, IReadOnlyList<string> argv)
     {
         var args = argv.ToList();
         var json = args.RemoveAll(a => a == "--json") > 0;
         var help = false;
-        // Help words count anywhere before a literal "--".
         var stop = args.IndexOf("--");
         for (var i = (stop < 0 ? args.Count : stop) - 1; i >= 0; i--)
-            if (IsHelp(args[i])) { help = true; args.RemoveAt(i); }
+            if (HelpOptions.Contains(args[i])) { help = true; args.RemoveAt(i); }
+        // `avamux help`, `avamux help terminal new`.
+        if (args.Count > 0 && HelpWords.Contains(args[0])) { help = true; args.RemoveAt(0); }
 
         if (args.Count == 0) return new(null, new JsonObject(), true, null, json, null);
 
@@ -33,8 +42,12 @@ public static class CliParser
             def = registry.Find(string.Join(' ', args.Take(n)));
             if (def is not null) { used = n; break; }
         }
+        // `avamux terminal new help`: the word alone after a command.
+        if (def is not null && args.Count == used + 1 && HelpWords.Contains(args[used])) { help = true; args.RemoveAt(used); }
         if (def is null)
         {
+            // `avamux terminal help`: the word alone after a group.
+            if (args.Count == 2 && HelpWords.Contains(args[1])) { help = true; args.RemoveAt(1); }
             var topic = args[0];
             if (registry.Groups.Contains(topic, StringComparer.OrdinalIgnoreCase))
                 return help || args.Count == 1
