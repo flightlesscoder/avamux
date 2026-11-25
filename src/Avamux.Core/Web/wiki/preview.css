@@ -4,6 +4,8 @@ body.wide { max-width: none; }
 h1, h2 { border-bottom: 1px solid var(--line); padding-bottom: .25em; }
 h1, h2, h3, h4 { color: var(--textStrong); line-height: 1.25; }
 a { color: var(--link); }
+a.tag { text-decoration: none; padding: 0 .3em; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-size: .92em; }
+a.tag:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); }
 #content img { max-width: 100%; border-radius: var(--radius); cursor: zoom-in; }
 code { background: var(--lineSoft); padding: .1em .35em; border-radius: 4px; font: 13px "JetBrainsMono Nerd Font Mono", "JetBrains Mono", ui-monospace, Menlo, monospace; }
 pre { background: var(--bgEditor); color: var(--textCode); padding: 12px 14px; border-radius: var(--radius); overflow: auto; position: relative; border: 1px solid var(--lineSoft); }
@@ -73,6 +75,12 @@ pre.file .l::before { content: counter(ln); display: inline-block; width: 3.6em;
 #menu div { padding: 6px 12px; border-radius: 4px; cursor: default; white-space: nowrap; }
 #menu div:hover { background: var(--scroll); }
 #menu hr { margin: 4px 0; }
+#menu div.off { color: var(--faint); }
+#menu div.sub { position: relative; padding-right: 26px; }
+#menu div.sub::after { content: "›"; position: absolute; right: 10px; color: var(--dim); }
+#menu div.sub > section { display: none; position: absolute; left: 100%; top: -5px; background: var(--panel); border: 1px solid var(--scroll);
+  border-radius: 6px; padding: 4px; min-width: 180px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+#menu div.sub:hover > section { display: block; }
 
 /* Code blocks: copy button in the top-right corner, shown when the block is hovered or focused. */
 .codewrap { position: relative; margin: 1em 0; }

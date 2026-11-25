@@ -46,6 +46,12 @@ public sealed class TerminalSettings
     public int CrtIntensity { get; set; } = 50;
     /// <summary>A faint flicker, like a tube that is not quite steady.</summary>
     public bool CrtFlicker { get; set; }
+    /// <summary>
+    /// The CRT effect's text glow. fast: one soft halo over the whole text, in the foreground colour. colour: each
+    /// character glows in its own colour, which the web view has to blur glyph by glyph on the CPU: several times
+    /// slower to draw (full-screen programs such as nvim lag). off: no glow.
+    /// </summary>
+    public string CrtGlow { get; set; } = "fast";
     public bool CloseTabOnExit { get; set; } = true;
     /// <summary>Save the scrollback of a terminal to the Logs page when it ends.</summary>
     public bool PreserveDeadSessions { get; set; } = true;
@@ -129,6 +135,12 @@ public sealed class WikiSettings
     public bool EditorPictures { get; set; } = true;
     /// <summary>Tallest a picture is drawn in the editor, in pixels. Smaller pictures keep their own size.</summary>
     public double EditorPictureHeight { get; set; } = 220;
+    /// <summary>With the editor and the preview side by side, scrolling one scrolls the other to the same place.</summary>
+    public bool SyncScroll { get; set; } = true;
+    /// <summary>Before committing the wiki, point out files that are big or not text (pictures excepted), which git keeps forever.</summary>
+    public bool CommitWarning { get; set; } = true;
+    /// <summary>Files this many megabytes or more count as big for <see cref="CommitWarning"/>.</summary>
+    public double CommitWarningMegabytes { get; set; } = 5;
 }
 
 public sealed class UiSettings
@@ -140,6 +152,8 @@ public sealed class UiSettings
     public bool TaskbarAlert { get; set; } = true;
     /// <summary>Key that swaps the window for the boss screen and back, e.g. Ctrl+Shift+B. Empty turns it off.</summary>
     public string BossKey { get; set; } = "Ctrl+Shift+B";
+    /// <summary>Opens the command palette from anywhere: a modifier pressed twice ("Shift Shift", "Ctrl Ctrl", "Alt Alt", "Cmd Cmd") or a shortcut such as Ctrl+Shift+P. Empty turns it off.</summary>
+    public string CommandPaletteKey { get; set; } = "Shift Shift";
     /// <summary>What the boss screen pretends to be: spreadsheet or build.</summary>
     public string BossScreen { get; set; } = "spreadsheet";
     /// <summary>Minimize avamux's other windows while the boss screen is up.</summary>
@@ -182,9 +196,47 @@ public sealed class ThemeSettings
 public sealed class AiSettings
 {
     /// <summary>Show the AI Chat page in the navigation.</summary>
-    public bool Chat { get; set; }
-    /// <summary>Show the Workloads page in the navigation.</summary>
-    public bool Workloads { get; set; }
+    public bool Chat { get; set; } = true;
+    /// <summary>Show the AI Workloads page in the navigation.</summary>
+    public bool Workloads { get; set; } = true;
+    /// <summary>Folders of start-*.sh / stop-*.sh pairs that AI Workloads offers as profiles (comma separated).</summary>
+    public string WorkloadScripts { get; set; } = "";
+    /// <summary>Folders AI Workloads searches for model files, besides the usual places (comma separated).</summary>
+    public string WorkloadModels { get; set; } = "";
+    /// <summary>The provider new chats start with (an id from Settings → AI Chat). Empty: the first one.</summary>
+    public string ChatProvider { get; set; } = "";
+    /// <summary>The agent's working folder for chats and actions. Empty: the wiki folder.</summary>
+    public string ChatFolder { get; set; } = "";
+    /// <summary>Show the model's thinking (when the provider shows it) open rather than folded away.</summary>
+    public bool ExpandThinking { get; set; }
+    /// <summary>The provider AI Actions use unless an action names another.</summary>
+    public string ActionsProvider { get; set; } = "claude-code";
+    /// <summary>The model AI Actions use with their default provider. Empty: the provider's own.</summary>
+    public string ActionsModel { get; set; } = "haiku";
+    /// <summary>The effort AI Actions use with their default provider. Empty: the provider's own.</summary>
+    public string ActionsEffort { get; set; } = "low";
+    public TtsSettings Tts { get; set; } = new();
+}
+
+/// <summary>Speaking replies aloud with Kokoro, run by a small Python helper. Off until switched on.</summary>
+public sealed class TtsSettings
+{
+    /// <summary>Off by default: nothing is started until it is switched on (avamux asks the first time something is to be spoken).</summary>
+    public bool Enabled { get; set; }
+    /// <summary>The Python that has kokoro_onnx (and onnxruntime) installed, e.g. a project's .venv/bin/python.</summary>
+    public string Python { get; set; } = "";
+    /// <summary>The Kokoro model file (kokoro-v1.0.int8.onnx or kokoro-v1.0.onnx).</summary>
+    public string Model { get; set; } = "";
+    /// <summary>The voices file (voices-v1.0.bin).</summary>
+    public string Voices { get; set; } = "";
+    public string Voice { get; set; } = "af_nova";
+    public double Speed { get; set; } = 1.05;
+    /// <summary>0 to 1.</summary>
+    public double Volume { get; set; } = 0.85;
+    /// <summary>Speak every reply in AI Chat as it is written.</summary>
+    public bool AutoSpeak { get; set; }
+    /// <summary>Unload the model after this many minutes without speaking. 0 keeps it loaded until switched off.</summary>
+    public double IdleMinutes { get; set; } = 10;
 }
 
 public sealed class BrowserSettings

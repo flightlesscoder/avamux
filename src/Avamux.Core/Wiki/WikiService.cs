@@ -36,6 +36,14 @@ public sealed partial class WikiService
 
     public string Root => _paths.WikiDir;
     public event Action? Changed;
+    /// <summary>Raised with the wiki path that was written, moved (both names) or deleted; null when anything may have changed.</summary>
+    public event Action<string?>? PathChanged;
+
+    private void Raise(params string?[] paths)
+    {
+        foreach (var p in paths) PathChanged?.Invoke(p);
+        Changed?.Invoke();
+    }
 
     /// <summary>The id the wiki folder goes by as a git repository (see <see cref="Repo"/>).</summary>
     public const string RepoId = "@wiki";
@@ -43,7 +51,7 @@ public sealed partial class WikiService
     public Repos.RepoEntry Repo => new() { Id = RepoId, Name = "Wiki", Path = Root };
 
     /// <summary>Says the files changed underneath the wiki (a branch was switched, a commit reverted).</summary>
-    public void NotifyChanged() => Changed?.Invoke();
+    public void NotifyChanged() => Raise((string?)null);
 
     public string Resolve(string path) => PathSafety.Combine(Root, path);
 
@@ -136,11 +144,12 @@ public sealed partial class WikiService
         var full = Resolve(path);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
         File.WriteAllText(full, content);
-        Changed?.Invoke();
-        return PathSafety.Relative(Root, full);
+        var rel = PathSafety.Relative(Root, full);
+        Raise(rel);
+        return rel;
     }
 
-    public void CreateFolder(string path) { Directory.CreateDirectory(Resolve(path)); Changed?.Invoke(); }
+    public void CreateFolder(string path) { Directory.CreateDirectory(Resolve(path)); Raise(path); }
 
     public void Delete(string path)
     {
@@ -149,7 +158,7 @@ public sealed partial class WikiService
         if (Directory.Exists(full)) Directory.Delete(full, true);
         else if (File.Exists(full)) File.Delete(full);
         else throw new FileNotFoundException($"No wiki entry '{path}'.");
-        Changed?.Invoke();
+        Raise(PathSafety.Relative(Root, full));
     }
 
     public string Move(string from, string to)
@@ -161,8 +170,9 @@ public sealed partial class WikiService
         if (Directory.Exists(src)) Directory.Move(src, dst);
         else if (File.Exists(src)) File.Move(src, dst);
         else throw new FileNotFoundException($"No wiki entry '{from}'.");
-        Changed?.Invoke();
-        return PathSafety.Relative(Root, dst);
+        var moved = PathSafety.Relative(Root, dst);
+        Raise(PathSafety.Relative(Root, src), moved);
+        return moved;
     }
 
     /// <summary>Copies an external file (usually an image) next to a page; returns its wiki path.</summary>
@@ -171,7 +181,7 @@ public sealed partial class WikiService
         var dst = FreePath(folder, System.IO.Path.GetFileName(sourceFile));
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dst)!);
         File.Copy(sourceFile, dst);
-        Changed?.Invoke();
+        Raise(PathSafety.Relative(Root, dst));
         return PathSafety.Relative(Root, dst);
     }
 
@@ -213,7 +223,7 @@ public sealed partial class WikiService
         var dst = FreePath(folder, name);
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dst)!);
         File.WriteAllBytes(dst, data);
-        Changed?.Invoke();
+        Raise(PathSafety.Relative(Root, dst));
         return PathSafety.Relative(Root, dst);
     }
 
@@ -342,17 +352,42 @@ public sealed partial class WikiService
         return sb.Append("</tbody></table>\n").ToString();
     }
 
-    public static string Render(string markdown)
+    /// <param name="sourceLines">
+    /// Mark each block with the page line it starts on (<c>data-line</c>, counted from 1 like the editor), so the
+    /// preview can scroll along with the editor.
+    /// </param>
+    public static string Render(string markdown, bool sourceLines = false)
     {
         var (meta, body) = SplitFrontMatter(markdown);
-        var text = WikiLink().Replace(body, m =>
+        // Tags and [[links]] become markdown on the same line, so line numbers in the body stay as written.
+        var text = WikiLink().Replace(WikiTags.Linkify(MarkdownLinks.AutolinkFiles(body)), m =>
         {
             if (m.Groups[1].Success) return m.Value;
             var target = m.Groups[2].Value.Trim();
             var label = m.Groups[3].Success ? m.Groups[3].Value.Trim() : target;
             return $"[{label}]({Uri.EscapeDataString(target).Replace("%2F", "/")}.md)";
         });
-        return (meta is null ? "" : FrontMatterHtml(meta)) + Markdown.ToHtml(text, Pipeline);
+        var front = meta is null ? "" : FrontMatterHtml(meta);
+        if (!sourceLines) return front + Markdown.ToHtml(text, Pipeline);
+        if (front.Length > 0) front = front.Replace("<table class=\"frontmatter\"", "<table class=\"frontmatter\" data-line=\"1\"");
+        var skipped = Newlines(markdown) - Newlines(body); // the front matter's lines
+        var doc = Markdown.Parse(text, Pipeline);
+        foreach (var block in doc.Descendants<Block>())
+            if (block is not (LinkReferenceDefinitionGroup or LinkReferenceDefinition or BlankLineBlock))
+                block.GetAttributes().AddProperty("data-line", (block.Line + 1 + skipped).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var writer = new StringWriter();
+        var renderer = new HtmlRenderer(writer);
+        Pipeline.Setup(renderer);
+        renderer.Render(doc);
+        writer.Flush();
+        return front + writer;
+    }
+
+    private static int Newlines(string text)
+    {
+        var n = 0;
+        foreach (var c in text) if (c == '\n') n++;
+        return n;
     }
 
     /// <summary>Fenced code blocks go through <see cref="Syntax"/>, using the language named after the opening fence.</summary>
@@ -379,6 +414,9 @@ public sealed partial class WikiService
             var lang = Syntax.Normalize(info);
             renderer.EnsureLine();
             renderer.Write("<pre");
+            // Only the source line (Render with sourceLines): the class Markdig gives fenced blocks goes on <code> below.
+            if (block.TryGetAttributes()?.Properties?.FirstOrDefault(p => p.Key == "data-line") is { Key: not null } line)
+                renderer.Write(" data-line=\"").WriteEscape(line.Value ?? "").Write("\"");
             if (!string.IsNullOrWhiteSpace(info)) renderer.Write(" data-lang=\"").WriteEscape(info.Trim()).Write("\"");
             renderer.Write("><code");
             if (!string.IsNullOrWhiteSpace(info)) renderer.Write(" class=\"language-").WriteEscape(info.Trim().Split(' ')[0]).Write("\"");

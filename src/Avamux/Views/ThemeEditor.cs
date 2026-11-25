@@ -615,7 +615,7 @@ public sealed class ThemeEditorWindow : AppWindow
             var scroll = _source.TextArea.TextView.ScrollOffset;
             _source.Text = text;
             _source.CaretOffset = Math.Min(caret, text.Length);
-            _source.ScrollToVerticalOffset(scroll.Y);
+            _source.ScrollEditorTo(scroll.Y);
         }
         finally { _settingSource = false; }
     }

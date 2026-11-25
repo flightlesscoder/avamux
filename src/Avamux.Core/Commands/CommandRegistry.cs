@@ -199,6 +199,9 @@ public sealed partial class CommandRegistry
         r.AddActivityCommands(s!);
         r.AddSearchCommands(s!);
         r.AddPageCommands(s!);
+        r.AddPluginCommands(s!);
+        r.AddAiCommands(s!);
+        r.AddWorkloadCommands(s!);
         return r;
     }
 }

@@ -1,3 +1,4 @@
+using Avalonia.VisualTree;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
@@ -49,6 +50,48 @@ public class LoadTests(ITestOutputHelper output)
         var watch = System.Diagnostics.Stopwatch.StartNew();
         while (watch.ElapsedMilliseconds < ms) { Dispatcher.UIThread.RunJobs(); h.Window.UpdateLayout(); Thread.Sleep(10); }
         return h.Pictures.LoadRedraws - before;
+    }
+
+    [AvaloniaFact(Skip = Load.Why, SkipUnless = nameof(Load.On), SkipType = typeof(Load))]
+    public void A_chat_of_thousands_of_messages()
+    {
+        var count = Load.N(2000);
+        var body = Load.Markdown(1200);
+        ChatHarness? h = null;
+        var s = Load.Measure(() => h = new ChatHarness(x =>
+        {
+            var history = new List<(string, string)>();
+            for (var i = 0; i < count / 2; i++) { history.Add(("user", $"Question {i}: what about the lanterns?")); history.Add(("assistant", body)); }
+            x.Services.Ai.Chats.Create(new Avamux.Plugins.AiChatRequest { Title = "Long chat", ProviderId = "claude-code", History = history });
+        }));
+        using (h)
+        {
+            Check($"open a chat of {count} messages", s, budgetMs: 2500 * Load.Scale, note: "only the messages in view are built");
+            var scroll = h!.Page.GetVisualDescendants().OfType<Avalonia.Controls.ScrollViewer>().First(v => v.Content is Avalonia.Controls.ItemsControl);
+            s = Load.Measure(() => { for (var i = 0; i < 40; i++) { scroll.Offset = new Avalonia.Vector(0, scroll.Offset.Y - 600); h.Settle(); } });
+            Check("scroll up 40 screens", s with { Ms = s.Ms / 40 }, budgetMs: 120, note: "per screen");
+
+            // A reply streaming into the end of it: 400 pieces, as a fast model writes.
+            var chats = h.Services.Ai.Chats;
+            var chat = chats.List()[0];
+            var reply = Avamux.Core.Ai.ChatService.Thread(chat).Last();
+            reply.Text = "";
+            reply.IsWriting = true;
+            var row = h.Page.GetVisualDescendants().OfType<ChatMessageView>().Count();
+            var slowest = 0.0;
+            s = Load.Measure(() =>
+            {
+                for (var i = 0; i < 400; i++)
+                {
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
+                    reply.Text += "word " + (i % 12 == 11 ? "and so it goes.\n\n" : "");
+                    typeof(Avamux.Core.Ai.ChatService).GetMethod("Raise", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(chats, [chat.Id]);
+                    h.Settle();
+                    slowest = Math.Max(slowest, watch.Elapsed.TotalMilliseconds);
+                }
+            });
+            Check("400 pieces of a reply streamed in", s with { Ms = s.Ms / 400 }, budgetMs: 30, note: $"per piece; slowest {slowest:0} ms");
+        }
     }
 
     [AvaloniaFact(Skip = Load.Why, SkipUnless = nameof(Load.On), SkipType = typeof(Load))]

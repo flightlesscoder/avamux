@@ -7,6 +7,8 @@ using Avamux.Core.Events;
 using Avamux.Core.GitActivity;
 using Avamux.Core.Logging;
 using Avamux.Core.Nav;
+using Avamux.Core.Plugins;
+using Avamux.Core.Ai;
 using Avamux.Core.Repos;
 using Avamux.Core.Search;
 using Avamux.Core.SystemInfo;
@@ -41,6 +43,7 @@ public sealed class AppServices : IAsyncDisposable
         Events = new EventService(Paths, Config);
         Wiki = new WikiService(Paths, () => (long)(Config.Settings.Wiki.ClickToPreviewMegabytes * 1048576));
         Repos = new RepoService(Paths, Config);
+        Tags = new WikiTagIndex(Wiki, Paths);
         Repos.AddBuiltIn(Wiki.Repo);
         Nav = new NavService(Paths);
         Activity = new GitActivityService(Paths);
@@ -50,6 +53,11 @@ public sealed class AppServices : IAsyncDisposable
         Web = new WebServer(this);
         Dashboard = new DashboardService(this);
         Search = new SearchService(this);
+        Plugins = new PluginService(this);
+        Ai = new AiService(this);
+        Speech = new SpeechService(this);
+        Workloads = new Workloads.WorkloadService(this);
+        Workloads.Notice += (title, message) => Host.Notify(title, message);
         Commands = CommandRegistry.Build(this);
 
         // Theme sounds for the things worth hearing about.
@@ -83,6 +91,8 @@ public sealed class AppServices : IAsyncDisposable
     public WatchService Watches { get; }
     public EventService Events { get; }
     public WikiService Wiki { get; }
+    /// <summary>Which wiki pages carry which #tags.</summary>
+    public WikiTagIndex Tags { get; }
     public RepoService Repos { get; }
     public NavService Nav { get; }
     /// <summary>Git Activity: commits across whole organisations, read in the background.</summary>
@@ -92,6 +102,14 @@ public sealed class AppServices : IAsyncDisposable
     /// <summary>The `avamux browser` commands; the panes themselves are the UI's.</summary>
     public BrowserService Browser { get; }
     public WebServer Web { get; }
+    /// <summary>Plugins: built-in ones, those in the plugins folder, and page plugins.</summary>
+    public PluginService Plugins { get; }
+    /// <summary>AI chat providers and the conversations with them.</summary>
+    public AiService Ai { get; }
+    /// <summary>Speaking replies aloud with Kokoro (off until switched on).</summary>
+    public SpeechService Speech { get; }
+    /// <summary>AI Workloads: model servers, queue jobs, agents and tasks, profiles that start servers, models on disk.</summary>
+    public Workloads.WorkloadService Workloads { get; }
     public DashboardService Dashboard { get; }
     public CommandRegistry Commands { get; }
     public DateTime Started { get; } = DateTime.Now;
@@ -117,8 +135,11 @@ public sealed class AppServices : IAsyncDisposable
         ThemeFiles.Watch();
         Caffeine.Start();
         Logs.Start();
+        Plugins.Start(); // before watches start checking: plugins add watch kinds
         Watches.Start();
         Events.Start();
+        Tags.Start();
+        Workloads.Start();
     }
 
     public async ValueTask DisposeAsync()
@@ -126,12 +147,20 @@ public sealed class AppServices : IAsyncDisposable
         // Each step is noted on the timeline, so a slow shutdown shows which part held it up.
         void Step(string name, Action close) { close(); Diagnostics.Timeline.Note("closed: " + name); }
         Step("ui state", Ui.Save);
+        Step("plugins", Plugins.Stop);
+        await Speech.DisposeAsync();
+        Diagnostics.Timeline.Note("closed: speech");
+        await Workloads.DisposeAsync();
+        Diagnostics.Timeline.Note("closed: workloads");
+        await Ai.DisposeAsync();
+        Diagnostics.Timeline.Note("closed: ai");
         Step("disk scans", Disks.Dispose);
         Step("git activity", Activity.Dispose);
         Step("watches", Watches.Dispose);
         Step("events", Events.Dispose);
         Step("caffeine", Caffeine.Dispose);
         Step("terminals", Terminals.Dispose);
+        Step("wiki tags", Tags.Dispose);
         await Web.DisposeAsync();
         Diagnostics.Timeline.Note("closed: web server");
         Step("config", Config.Dispose);

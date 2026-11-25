@@ -25,6 +25,7 @@
   window.setTheme = function (css) { document.getElementById('theme').textContent = ':root { ' + css + ' }'; return true; };
 
   window.setContent = function (html, folder, path, scroll) {
+    anchors = null;
     const same = path === current;
     const y = same ? window.scrollY : (scroll || 0);
     current = path;
@@ -82,12 +83,66 @@
     return true;
   };
 
+  // ---- scrolling along with the editor ----
+  // Blocks carry the page line they start on (data-line). The editor says which line is at its top (with a
+  // fraction); the preview puts the same place at its top, between the blocks around it. And the other way round.
+  let anchors = null;      // [{ line, y }] in page order, measured lazily (layout changes with pictures and width)
+  let syncing = 0;         // until when scroll events come from syncTo, not the reader
+  let lastLine = 1;        // the page's line count, for the stretch after the last block
+  window.syncEnabled = false;
+  function measure() {
+    if (anchors) return anchors;
+    anchors = [];
+    let prev = -1;
+    for (const el of content.querySelectorAll('[data-line]')) {
+      const line = +el.dataset.line;
+      if (!(line > prev)) continue; // nested blocks (a list's paragraphs) only when they move on
+      anchors.push({ line, y: el.getBoundingClientRect().top + window.scrollY });
+      prev = line;
+    }
+    return anchors;
+  }
+  new ResizeObserver(() => { anchors = null; }).observe(content);
+  function bottom() { return Math.max(0, document.documentElement.scrollHeight - innerHeight); }
+  /** Scrolls so the given editor line (fractional, from 1) is at the top. */
+  window.syncTo = function (line, lines) {
+    if (lines) lastLine = lines;
+    const a = measure();
+    let y;
+    if (!a.length) y = bottom() * Math.min(1, Math.max(0, (line - 1) / Math.max(1, lastLine - 1)));
+    else {
+      let i = a.length - 1;
+      while (i >= 0 && a[i].line > line) i--;
+      const from = i < 0 ? { line: 1, y: 0 } : a[i];
+      const to = i + 1 < a.length ? a[i + 1] : { line: lastLine + 1, y: document.documentElement.scrollHeight };
+      y = from.y + (to.y - from.y) * Math.min(1, Math.max(0, (line - from.line) / Math.max(1, to.line - from.line)));
+    }
+    syncing = Date.now() + 150;
+    window.scrollTo(0, Math.min(bottom(), Math.max(0, y)));
+    return true;
+  };
+  /** The editor line (fractional) at the top of the preview. */
+  function lineAtTop() {
+    const a = measure();
+    const y = window.scrollY;
+    if (!a.length) return 1 + (lastLine - 1) * (bottom() ? y / bottom() : 0);
+    let i = a.length - 1;
+    while (i >= 0 && a[i].y > y) i--;
+    const from = i < 0 ? { line: 1, y: 0 } : a[i];
+    const to = i + 1 < a.length ? a[i + 1] : { line: lastLine + 1, y: document.documentElement.scrollHeight };
+    return from.line + (to.line - from.line) * Math.min(1, Math.max(0, (y - from.y) / Math.max(1, to.y - from.y)));
+  }
+  let syncFrame = 0;
+
   let scrollTimer = null;
   window.addEventListener('scroll', () => {
     if (restoring || !current) return;
     clearTimeout(scrollTimer);
     const path = current;
     scrollTimer = setTimeout(() => post({ t: 'scroll', path, y: Math.round(window.scrollY) }), 250);
+    // The reader scrolled the preview: the editor follows (once a frame).
+    if (window.syncEnabled && Date.now() > syncing && !syncFrame)
+      syncFrame = requestAnimationFrame(() => { syncFrame = 0; post({ t: 'sync', path, line: lineAtTop() }); });
   }, { passive: true });
 
   // ---- zoom and pan ----
@@ -205,7 +260,7 @@
 
   // ---- right-click menu for pictures ----
 
-  function hideMenu() { menu.style.display = 'none'; }
+  function hideMenu() { menu.style.display = 'none'; menuAt = null; }
   function showMenu(ev, items) {
     menu.innerHTML = '';
     for (const item of items) {
@@ -219,9 +274,78 @@
     menu.style.left = Math.max(4, Math.min(ev.clientX, innerWidth - menu.offsetWidth - 6)) + 'px';
     menu.style.top = Math.max(4, Math.min(ev.clientY, innerHeight - menu.offsetHeight - 6)) + 'px';
   }
+  // Items the app adds to the menu that is open (plugins: AI Actions …): [{k, h, e, t, c: [...]} | {s: 1}].
+  function addItems(container, items, depth) {
+    for (const item of items) {
+      if (item.s) { container.appendChild(document.createElement('hr')); continue; }
+      const d = document.createElement('div');
+      d.textContent = item.h;
+      if (item.t) d.title = item.t;
+      if (item.e === false) d.className = 'off';
+      if (item.c && item.c.length) {
+        d.classList.add('sub');
+        const box = document.createElement('section');
+        addItems(box, item.c, depth + 1);
+        d.appendChild(box);
+      } else if (item.e !== false) {
+        d.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); hideMenu(); post({ t: 'menuItem', k: item.k }); });
+      }
+      container.appendChild(d);
+    }
+  }
+  // Where the last text menu was asked for; the app's items arrive a moment later and open it there if it is not open.
+  let menuAt = null;
+  window.addMenuItems = items => {
+    if (!menuAt || !items || !items.length || Date.now() - menuAt.time > 2000) return;
+    if (menu.style.display !== 'block') { menu.innerHTML = ''; menu.style.display = 'block'; }
+    else menu.appendChild(document.createElement('hr'));
+    addItems(menu, items, 0);
+    menu.style.left = Math.max(4, Math.min(menuAt.x, innerWidth - menu.offsetWidth - 6)) + 'px';
+    menu.style.top = Math.max(4, Math.min(menuAt.y, innerHeight - menu.offsetHeight - 6)) + 'px';
+  };
+  // A link's own items: open it, copy where it goes, copy its words. Tags copy as #tag.
+  function linkItems(a) {
+    if (!a) return [];
+    const text = (a.textContent || '').trim();
+    if (a.dataset.tag) return [['Copy Tag', () => post({ t: 'copyText', text: '#' + a.dataset.tag })]];
+    const href = a.getAttribute('href');
+    if (!href) return [];
+    if (href.startsWith('#')) {
+      const items = [['Copy Link', () => post({ t: 'copyText', text: href })]];
+      if (text) items.push(['Copy Link Text', () => post({ t: 'copyText', text })]);
+      return items;
+    }
+    const url = new URL(href, document.baseURI);
+    const items = [];
+    if (url.origin !== location.origin) {
+      items.push([url.protocol === 'file:' ? 'Open' : 'Open in Browser', () => post({ t: 'open', url: url.href })]);
+      items.push(['Copy Link', () => post({ t: 'copyText', text: url.href })]);
+    } else {
+      // A page or file in the wiki: its path in the wiki, as [[links]] and the command line take it.
+      const path = decodeURIComponent(url.pathname.replace(/^\/wiki\/raw\//, ''));
+      items.push(['Open', () => post({ t: 'page', path })]);
+      items.push(['Copy Link', () => post({ t: 'copyText', text: path })]);
+    }
+    if (text && text !== url.href) items.push(['Copy Link Text', () => post({ t: 'copyText', text })]);
+    return items;
+  }
   document.addEventListener('contextmenu', ev => {
     const img = ev.target.closest('img');
-    if (!img) { hideMenu(); return; }
+    if (!img) {
+      // Text: Copy when something is selected, and whatever the app adds.
+      ev.preventDefault();
+      if (ev.target.closest('#menu')) return;
+      const sel = String(window.getSelection() || '');
+      const items = [];
+      if (sel) items.push(['Copy', () => post({ t: 'copyText', text: sel })]);
+      const link = linkItems(ev.target.closest('#content a'));
+      if (link.length) { if (items.length) items.push(null); items.push(...link); }
+      if (items.length) showMenu(ev, items);
+      else hideMenu();
+      menuAt = { x: ev.clientX, y: ev.clientY, time: Date.now() };
+      post({ t: 'menu', sel });
+      return;
+    }
     ev.preventDefault();
     const path = wikiPath(img.currentSrc || img.src);
     const inViewer = !!img.closest('.stage');
@@ -265,6 +389,7 @@
       if (img && !img.closest('.stage')) openLightbox(img.currentSrc || img.src);
       return;
     }
+    if (a.dataset.tag) { ev.preventDefault(); post({ t: 'tag', tag: a.dataset.tag }); return; }
     const href = a.getAttribute('href'); if (!href) return;
     ev.preventDefault();
     if (href.startsWith('#')) { const t = document.getElementById(decodeURIComponent(href.slice(1))); if (t) t.scrollIntoView(); return; }

@@ -37,11 +37,14 @@ public partial class App : Application
                 Log.Error("app", $"Unhandled UI exception (report: {file})", e.Exception);
                 e.Handled = true;
             };
+            Services.Plugins.Ui = new Views.AppPluginUi();
+            Services.Plugins.AddBuiltIn(() => new Avamux.Plugins.AiActions.AiActionsPlugin());
             // The web server must be listening before any web view navigates to it.
             Services.StartAsync().GetAwaiter().GetResult();
             Timeline.Note("services started");
             Views.ThemeManager.Initialize(this);
             Services.Config.Changed += () => Dispatcher.UIThread.Post(() => Views.ThemeManager.Apply(this));
+            Views.CommandPalette.Install();
             var window = new MainWindow();
             Timeline.Note("window created");
             window.Opened += (_, _) =>
@@ -50,6 +53,7 @@ public partial class App : Application
                 window.RequestAnimationFrame(_ => Timeline.NoteOnce("first frame"));
             };
             Services.Host = new AppHost(window, desktop);
+            Services.Ai.ChatHost = new Views.AppChatHost(window);
             desktop.MainWindow = window;
             Avamux.Browser.BrowserHost.Instance.Start();
             Avamux.Core.Terminal.TerminalManager.TabOf = Views.TerminalLayout.TabOf;

@@ -722,6 +722,15 @@ public sealed class RepositoriesPage : UserControl, IPage
         else if (staged) menu.Items.Add(Ui.Item("Unstage", () => Repos.UnstageAsync(repo, c.Path)));
         else menu.Items.Add(Ui.Item("Stage", () => Repos.StageAsync(repo, c.Path)));
         if (!staged && what != "conflict") menu.Items.Add(Ui.Item(c.Untracked ? "Delete File…" : "Discard Changes…", () => DiscardAsync(repo, c)));
+        if (what != "conflict" && c.Path != ".gitignore")
+        {
+            var ignore = new MenuItem { Header = "Ignore", Icon = new PathIcon { Data = Icons.EyeOff } };
+            foreach (var (label, pattern) in GitIgnore.Suggestions(c.Path))
+                ignore.Items.Add(Ui.Item(label, () => IgnoreAsync(this, repo, c, pattern)));
+            ignore.Items.Add(new Separator());
+            ignore.Items.Add(Ui.Item("Open .gitignore", () => Ui.OpenInEditor(".gitignore", repo.Path), File.Exists(GitIgnore.FileOf(repo.Path)), Icons.Pencil));
+            menu.Items.Add(ignore);
+        }
         menu.Items.Add(new Separator());
         menu.Items.Add(Ui.Item("Open in Editor", () => Ui.OpenInEditor(c.Path, repo.Path), what != "deleted" && !c.Path.EndsWith('/'), Icons.Pencil));
         menu.Items.Add(Ui.Item("Open in Default App", () => Shell.Open(full), File.Exists(full)));
@@ -1482,6 +1491,21 @@ public sealed class RepositoriesPage : UserControl, IPage
     }
 
     /// <summary>
+    /// Adds a pattern to the .gitignore. A file git already tracks keeps being tracked by that alone, so it is taken
+    /// out of git as well (it stays on disk), after asking.
+    /// </summary>
+    private static async Task IgnoreAsync(Control from, RepoEntry repo, RepoChange change, string pattern)
+    {
+        var tracked = !change.Untracked && !(change.Index == 'A');
+        if (tracked && !await Ui.ConfirmAsync(Ui.Owner(from), "Ignore a tracked file",
+                $"{change.Path} is already in git, so ignoring it also takes it out of git: the next commit records it as removed, and the file stays on disk. Ignore it?", "Ignore"))
+            return;
+        var untrack = tracked || change.Staged ? new[] { change.Path } : [];
+        await Repos.IgnoreAsync(repo, pattern, untrack);
+        Ui.Toast(from, "Ignored", $"Added {pattern} to {repo.Name}'s .gitignore.");
+    }
+
+    /// <summary>
     /// The commit dialog, shared by this page and the wiki. With <paramref name="everything"/> every change is
     /// committed, staged or not (they are staged when the dialog is confirmed); otherwise only what is staged.
     /// Returns true when a commit was made.
@@ -1499,13 +1523,53 @@ public sealed class RepositoriesPage : UserControl, IPage
         var message = new TextBox { AcceptsReturn = true, MinHeight = 90, TextWrapping = TextWrapping.Wrap, PlaceholderText = "What changed, and why" };
         var summary = $"{files.Count} {(everything ? "changed" : "staged")} file{(files.Count == 1 ? "" : "s")} on {status.Branch ?? "?"}.";
         var list = Ui.Apply(Ui.Text(string.Join("\n", files.Take(12)) + (files.Count > 12 ? $"\n… and {files.Count - 12} more" : ""), "dim", 12), t => { t.FontFamily = Ui.Mono; t.TextWrapping = TextWrapping.NoWrap; t.TextTrimming = TextTrimming.CharacterEllipsis; });
-        return await Ui.FormAsync(Ui.Owner(from), $"Commit to {repo.Name}", Ui.Column(10, Ui.Text(summary, "dim", 12.5), list, Ui.Field("Message", message)), async () =>
+        var body = Ui.Column(10, Ui.Text(summary, "dim", 12.5), list);
+        // The wiki: point out big and binary files before git keeps them forever (Settings → Wiki can turn this off).
+        var wiki = App.Services.Config.Settings.Wiki;
+        CheckBox? leaveOut = null;
+        List<HeavyFile> heavy = [];
+        if (repo.Id == Avamux.Core.Wiki.WikiService.RepoId && wiki.CommitWarning)
+        {
+            var limit = (long)(Math.Max(0.01, wiki.CommitWarningMegabytes) * 1024 * 1024);
+            var candidates = status.Changes.Where(c => everything || c.Staged).Where(c => c.Description is not ("deleted" or "conflict")).Select(c => c.Path);
+            heavy = await Task.Run(() => RepoService.HeavyFiles(repo, candidates, limit));
+            if (heavy.Count > 0) body.Children.Add(HeavyWarning(heavy, wiki.CommitWarningMegabytes, out leaveOut));
+        }
+        body.Children.Add(Ui.Field("Message", message));
+        return await Ui.FormAsync(Ui.Owner(from), $"Commit to {repo.Name}", body, async () =>
         {
             if (string.IsNullOrWhiteSpace(message.Text)) return "Write a commit message.";
+            if (leaveOut?.IsChecked == true)
+                foreach (var f in heavy)
+                {
+                    var change = status.Changes.First(c => c.Path == f.Path);
+                    await Repos.IgnoreAsync(repo, GitIgnore.PatternFor(f.Path), change.Untracked ? [] : [f.Path]);
+                }
+            if (leaveOut?.IsChecked == true && !everything) await Repos.StageAsync(repo, ".gitignore"); // the new patterns go in with this commit
             if (everything) await Repos.StageAllAsync(repo);
+            else if (leaveOut?.IsChecked == true && (await Repos.StatusAsync(repo)).Changes.All(c => !c.Staged)) return "Nothing is left to commit: everything staged was left out.";
             await Repos.CommitAsync(repo, message.Text.Trim());
             return null;
         }, "Commit", 560);
+    }
+
+    /// <summary>The commit dialog's note about big or binary files, with a box to leave them out (into the .gitignore).</summary>
+    private static Control HeavyWarning(List<HeavyFile> heavy, double megabytes, out CheckBox leaveOut)
+    {
+        var lines = string.Join("\n", heavy.Take(8).Select(f => $"{f.Path}  ({f.Why})")) + (heavy.Count > 8 ? $"\n… and {heavy.Count - 8} more" : "");
+        leaveOut = new CheckBox { Content = heavy.Count == 1 ? "Leave it out: add it to .gitignore" : "Leave them out: add them to .gitignore", IsChecked = false };
+        return new Border
+        {
+            BorderBrush = Ui.Tk("warn"), BorderThickness = new Thickness(1), CornerRadius = Ui.R(6), Padding = new Thickness(10, 8),
+            Background = new SolidColorBrush(((ISolidColorBrush)Ui.Tk("warn")).Color, 0.08),
+            Child = Ui.Column(6,
+                Ui.Row(6, new PathIcon { Data = Icons.AlertCircle, Width = 14, Height = 14, Foreground = Ui.Tk("warn") },
+                    Ui.Apply(Ui.Text(heavy.Count == 1 ? "This file is big or not text" : $"{heavy.Count} files are big or not text", "", 12.5), t => t.FontWeight = FontWeight.SemiBold)),
+                Ui.Apply(Ui.Text($"Git keeps every version of a file forever, so big ({megabytes:0.#} MB or more) and binary files make the wiki's history heavy to copy and back up. Pictures are fine.", "dim", 12), t => t.TextWrapping = TextWrapping.Wrap),
+                Ui.Apply(Ui.Text(lines, "", 12), t => { t.FontFamily = Ui.Mono; t.TextWrapping = TextWrapping.NoWrap; t.TextTrimming = TextTrimming.CharacterEllipsis; }),
+                leaveOut,
+                Ui.Text("This warning can be switched off in Settings → Wiki.", "faint", 11.5)),
+        };
     }
 
     private async Task SwitchAsync(RepoEntry repo, RepoBranch branch)

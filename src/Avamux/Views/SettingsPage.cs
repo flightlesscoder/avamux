@@ -5,10 +5,12 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using Avamux.Core;
 using Avamux.Core.Commands;
 using Avamux.Core.Config;
 using Avamux.Core.Theming;
+using Avamux.Plugins;
 
 namespace Avamux.Views;
 
@@ -27,6 +29,7 @@ public sealed class SettingsPage : UserControl, IPage
         ["terminal.crt"] = ("CRT monitor effect", "Scanlines, softly glowing text and darkened corners over the terminal, like an old monitor."),
         ["terminal.crtIntensity"] = ("CRT strength", "0 to 100. Lower is subtler and easier to read."),
         ["terminal.crtFlicker"] = ("CRT flicker", "A faint, slow flicker of the screen."),
+        ["terminal.crtGlow"] = ("CRT text glow", "fast: a soft halo over all the text. colour: every character glows in its own colour, but drawing is several times slower (nvim and other full-screen programs lag). off: no glow."),
         ["terminal.cursorPulse"] = ("Heartbeat cursor", "The cursor beats like a pulse with a soft neon glow instead of blinking."),
         ["terminal.cursorPulseShape"] = ("Heartbeat cursor shape", "block is filled, outline is hollow, bar is a thin line."),
         ["terminal.cursorPulseColor"] = ("Heartbeat cursor colour", "Empty follows the theme's accent."),
@@ -51,6 +54,9 @@ public sealed class SettingsPage : UserControl, IPage
         ["wiki.autoSaveSeconds"] = ("Seconds before saving", "How long a page must go without a change before it is saved automatically."),
         ["wiki.clickToPreviewMegabytes"] = ("Load big files on a click (MB)", "Pictures, PDFs, audio and video larger than this wait behind a \"Load preview\" button, and are not drawn in the editor. 0 loads everything at once."),
         ["wiki.editorPictures"] = ("Pictures in the editor", "Show the pictures a page embeds in the editor as well as the preview, each under the line that embeds it. The markdown stays as it is: click a picture to select its text."),
+        ["wiki.commitWarning"] = ("Warn about big or binary files", "Before committing the wiki, list files that are big or not text (pictures are fine), which git would keep forever, with a way to leave them out."),
+        ["wiki.commitWarningMegabytes"] = ("Big file size", "Files this many megabytes or larger count as big for the warning above."),
+        ["wiki.syncScroll"] = ("Scroll editor and preview together", "With both shown side by side, scrolling one scrolls the other to the same part of the page."),
         ["wiki.editorPictureHeight"] = ("Picture height in the editor", "Tallest a picture is drawn in the editor, in pixels (40 to 2000). Smaller pictures keep their own size."),
         ["wiki.rememberedPositions"] = ("Remembered scroll positions", "How many wiki files have their last scroll position remembered."),
         ["ui.navStyle"] = ("Navigation bar", "Standard shows icons with labels; mini is a slim bar of smaller icons with tooltips."),
@@ -69,7 +75,24 @@ public sealed class SettingsPage : UserControl, IPage
         ["theme.soundOnPullRequest"] = ("Sound: pull request changes", ""),
         ["theme.soundOnAgentWaiting"] = ("Sound: AI agent waits for input", ""),
         ["ai.chat"] = ("AI Chat", "Show the AI Chat page in the navigation."),
-        ["ai.workloads"] = ("Workloads", "Show the Workloads page (providers, work queues, models on disk) in the navigation."),
+        ["ai.workloads"] = ("AI Workloads", "Show the AI Workloads page in the navigation: model servers, agents, queues and models on disk."),
+        ["ai.workloadScripts"] = ("Script folders", "Folders of start-*.sh / stop-*.sh pairs to offer as profiles on AI Workloads (comma separated)."),
+        ["ai.workloadModels"] = ("Model folders", "Folders to search for model files besides the usual places (comma separated)."),
+        ["ai.chatProvider"] = ("Provider for new chats", "Which of the providers above a new chat starts with."),
+        ["ai.chatFolder"] = ("Working folder", "The folder agents work in for chats and AI Actions. Empty: the wiki folder."),
+        ["ai.expandThinking"] = ("Show thinking open", "Show the model's thinking (for providers that show it) open instead of folded away."),
+        ["ai.actionsProvider"] = ("AI Actions provider", "Which of the providers above AI Actions use, unless an action names another. Picking another one sets the model and effort below back to its own when it does not offer them."),
+        ["ai.actionsModel"] = ("AI Actions model", "The model AI Actions use with that provider: pick one, or type its name."),
+        ["ai.actionsEffort"] = ("AI Actions effort", "How hard the model thinks for AI Actions (the levels that provider offers)."),
+        ["ai.tts.enabled"] = ("Speak with Kokoro", "Off by default. When something is to be spoken avamux asks to switch it on. Switching it off ends Kokoro and anything it is playing."),
+        ["ai.tts.python"] = ("Kokoro: Python", "A Python with kokoro_onnx installed, e.g. ~/.venvs/kokoro/bin/python."),
+        ["ai.tts.model"] = ("Kokoro: model file", "kokoro-v1.0.int8.onnx (or kokoro-v1.0.onnx)."),
+        ["ai.tts.voices"] = ("Kokoro: voices file", "voices-v1.0.bin."),
+        ["ai.tts.voice"] = ("Kokoro: voice", "af_nova, af_heart, af_bella, bm_george … (English voices; the Test Voice button lists them once Kokoro is on)."),
+        ["ai.tts.speed"] = ("Kokoro: speed", "1 is normal."),
+        ["ai.tts.volume"] = ("Kokoro: volume", "0 to 1."),
+        ["ai.tts.autoSpeak"] = ("Speak replies as they are written", "Every reply in the chat open is spoken as it comes (Kokoro must be on)."),
+        ["ai.tts.idleMinutes"] = ("Kokoro: unload after", "Minutes without speaking before the model is unloaded. 0 keeps it loaded until switched off."),
         ["watching.enabled"] = ("Watching enabled", "Turn all periodic checks on or off."),
         ["watching.defaultIntervalMinutes"] = ("Minutes between checks", "Used by watches that do not set their own interval."),
         ["watching.timeoutSeconds"] = ("Check timeout (seconds)", "A check that runs longer is stopped and reported as an error."),
@@ -92,6 +115,7 @@ public sealed class SettingsPage : UserControl, IPage
         ["ui.startPage"] = ("Start page", "Page shown when avamux starts."),
         ["ui.taskbarAlert"] = ("Taskbar alerts", "Flash or badge the taskbar icon when something needs attention while avamux is in the background."),
         ["ui.bossKey"] = ("Boss key", "Swaps the window for the boss screen and back (Esc also brings avamux back). Written like Ctrl+Shift+B or F12; empty turns it off."),
+        ["ui.commandPaletteKey"] = ("Command palette key", "Opens the command palette from anywhere, terminals included: Shift Shift (press Shift twice quickly), Ctrl Ctrl, Alt Alt, Cmd Cmd, or a shortcut such as Ctrl+Shift+P (Cmd+Shift+P on a Mac). Empty turns it off."),
         ["ui.bossScreen"] = ("Boss screen", "What it pretends to be: a budget spreadsheet, or a build that never quite finishes."),
         ["ui.bossHidesWindows"] = ("Boss screen minimizes other windows", "Also minimize avamux's other windows (detached terminals, the theme editor, …) while it is up."),
         ["browser.agentControl"] = ("Let agents drive the browser", "`avamux browser` commands (and the AI agents in terminal tabs that run them) can open panes, read pages, click and type. Off, only listing works."),
@@ -116,6 +140,7 @@ public sealed class SettingsPage : UserControl, IPage
         ["theme.windowChrome"] = ["auto", "system", "custom"],
         ["theme.soundSet"] = ["theme", .. SoundService.Sets],
         ["terminal.cursorPulseShape"] = ["block", "outline", "bar"],
+        ["terminal.crtGlow"] = ["fast", "colour", "off"],
     };
 
     private static bool IsColor(string key) => key is "theme.accent" or "theme.glowColor" or "terminal.background" or "terminal.foreground" or "terminal.cursorPulseColor" || key.StartsWith("events.", StringComparison.Ordinal) && key.EndsWith("Color", StringComparison.Ordinal);
@@ -123,7 +148,7 @@ public sealed class SettingsPage : UserControl, IPage
     private static readonly (string Key, string Title)[] Sections =
     [
         ("ui", "Window"), ("theme", "Themes"), ("caffeine", "Caffeine"), ("terminal", "Terminals"), ("browser", "Browser panes"), ("watching", "Watching"), ("events", "Events"), ("wiki", "Wiki"),
-        ("logs", "Logs"), ("dashboard", "Dashboard"), ("repositories", "Repositories"), ("ai", "AI Workloads"),
+        ("logs", "Logs"), ("dashboard", "Dashboard"), ("repositories", "Repositories"), ("ai", "AI Chat"),
     ];
 
     private readonly ComboBox _scope = new() { MinWidth = 250 };
@@ -140,6 +165,8 @@ public sealed class SettingsPage : UserControl, IPage
     private readonly List<(Control Card, List<string> Keys)> _cards = [];
     private readonly List<Control> _filterHidden = [];
     private readonly CustomPagesCard _customPages = new();
+    private readonly PluginsCard _plugins = new();
+    private readonly AiProvidersCard _aiProviders = new();
     private readonly StackPanel _hotkeys = new() { Spacing = 16 };
     private readonly Border _hotkeysCard;
     private string _hotkeyQuery = "";
@@ -193,7 +220,13 @@ public sealed class SettingsPage : UserControl, IPage
                 _filterHidden.Add(_themeProblems);
                 rows.Children.Add(_themeTiles);
             }
-            if (prefix == "ai") rows.Children.Add(Ui.Text("AI Chat and Workloads are placeholders for now. Switch them on to show them in the navigation.", "dim", 12.5));
+            if (prefix == "ai")
+            {
+                rows.Children.Add(_aiProviders);
+                rows.Children.Add(Ui.Apply(Ui.Row(8,
+                    Ui.IconButton(Icons.VolumeHigh, "Speak a sentence with the voice set below (asks to switch Kokoro on if it is off)", () => _ = SpeechUi.ToggleAsync(this, "Hello! This is how replies will sound.", "settings-test"), "Test Voice"),
+                    Ui.IconButton(Icons.Stop, "Stop speaking", () => App.Services.Speech.Stop(), "Stop")), c => _filterHidden.Add(c)));
+            }
             foreach (var v in all.Where(v => v.Path.StartsWith(prefix + ".", StringComparison.Ordinal))) rows.Children.Add(_rows[v.Path] = BuildRow(v));
             if (prefix == "theme") rows.Children.Add(Ui.Apply(SoundTests(), c => _filterHidden.Add(c)));
             if (rows.Children.Count > 1)
@@ -203,7 +236,7 @@ public sealed class SettingsPage : UserControl, IPage
                 _cards.Add((card, all.Where(v => v.Path.StartsWith(prefix + ".", StringComparison.Ordinal)).Select(v => v.Path).ToList()));
             }
             // The navigation is part of the window, so the user's own pages come right after its settings.
-            if (prefix == "ui") body.Children.Add(_customPages);
+            if (prefix == "ui") { body.Children.Add(_customPages); body.Children.Add(_plugins); }
         }
         _hotkeysCard = Ui.Card(new StackPanel
         {
@@ -235,11 +268,15 @@ public sealed class SettingsPage : UserControl, IPage
         };
         _filterSoon = Ui.Debounced(() => _ = ApplyFilterAsync(), 150);
         Config.Changed += Ui.Debounced(Refresh);
+        App.Services.Ai.Changed += Ui.Debounced(Refresh); // providers added, renamed or removed: the AI dropdowns list them
         Themes.ListChanged += Ui.Debounced(Refresh);
         Refresh();
     }
 
     public void OnShown() => Refresh();
+
+    /// <summary>Narrows the page to what matches <paramref name="query"/>, as typing it in the search box does.</summary>
+    public void Find(string query) => _find.Text = query;
 
     private Action _filterSoon = () => { };
     private int _filterRun;
@@ -262,6 +299,7 @@ public sealed class SettingsPage : UserControl, IPage
                 if (label.Contains(query, StringComparison.OrdinalIgnoreCase) || help.Contains(query, StringComparison.OrdinalIgnoreCase)) hits.Add(key);
         }
         var shown = 0;
+        var providersMatch = hits is null || _aiProviders.Matches(query);
         foreach (var (card, keys) in _cards)
         {
             var any = false;
@@ -272,16 +310,19 @@ public sealed class SettingsPage : UserControl, IPage
                 row.IsVisible = on;
                 if (on) { any = true; shown++; }
             }
-            card.IsVisible = any;
+            // The AI Chat card also holds the providers list, which matches on its own.
+            card.IsVisible = any || providersMatch && _aiProviders.GetVisualAncestors().Contains(card);
         }
         foreach (var c in _filterHidden) c.IsVisible = hits is null;
         _customPages.IsVisible = hits is null || _customPages.Matches(query);
+        _plugins.IsVisible = hits is null || _plugins.Matches(query);
+        _aiProviders.IsVisible = providersMatch;
         _hotkeyQuery = query;
         var hotkeys = BuildHotkeys();
         var counts = new List<string>();
         if (shown > 0) counts.Add($"{shown} setting{(shown == 1 ? "" : "s")}");
         if (hotkeys > 0) counts.Add($"{hotkeys} hotkey{(hotkeys == 1 ? "" : "s")}");
-        _findStatus.Text = hits is null ? "" : counts.Count > 0 ? string.Join(", ", counts) : _customPages.IsVisible ? "" : "Nothing found";
+        _findStatus.Text = hits is null ? "" : counts.Count > 0 ? string.Join(", ", counts) : _customPages.IsVisible || _plugins.IsVisible || providersMatch ? "" : "Nothing found";
         if (hits is not null) _scroll.Offset = default;
     }
 
@@ -438,6 +479,8 @@ public sealed class SettingsPage : UserControl, IPage
             editor = toggle;
             show = v => toggle.IsChecked = v?.GetValueKind() == JsonValueKind.True;
         }
+        else if (key is "ai.chatProvider" or "ai.actionsProvider" or "ai.actionsModel" or "ai.actionsEffort")
+            editor = AiChoice(key, out show);
         else if (Choices.TryGetValue(key, out var options))
         {
             var combo = new ComboBox { MinWidth = 180 };
@@ -556,6 +599,133 @@ public sealed class SettingsPage : UserControl, IPage
             ColumnDefinitions = new ColumnDefinitions("320,*,110,36"),
             Children = { text, editor.At(0, 1), source.At(0, 2), reset.At(0, 3) },
         };
+    }
+
+    /// <summary>
+    /// A dropdown for the AI settings that name a provider, model or effort: the providers set up above by name (the
+    /// setting keeps the provider's id), and the models and effort levels the AI Actions provider offers. A value that
+    /// is not in the list (a provider since removed, a model typed by hand) is kept and shown as it is.
+    /// </summary>
+    private Control AiChoice(string key, out Action<JsonNode?> show)
+    {
+        var ai = App.Services.Ai;
+        var isModel = key == "ai.actionsModel";
+        var combo = new ComboBox { MinWidth = 240, IsEditable = isModel };
+        var shown = "";
+        var filling = false;
+        var generation = 0;
+
+        void Fill(IEnumerable<(string Label, string Value, string? Tip)> items, string current, string missing)
+        {
+            filling = true;
+            try
+            {
+                combo.Items.Clear();
+                foreach (var (label, value, tip) in items)
+                    combo.Items.Add(Ui.Apply(new ComboBoxItem { Content = label, Tag = value }, i => { if (tip is not null) ToolTip.SetTip(i, tip); }));
+                if (combo.Items.OfType<ComboBoxItem>().All(i => (string)i.Tag! != current))
+                    combo.Items.Add(new ComboBoxItem { Content = current + missing, Tag = current });
+                combo.SelectedItem = combo.Items.OfType<ComboBoxItem>().First(i => (string)i.Tag! == current);
+            }
+            finally { filling = false; }
+        }
+
+        // The AI Actions provider as set now (the model and effort lists follow it).
+        AiProviderConfig? ActionsProvider() => ai.DefaultProviderId is { } id ? ai.Config(id) : null;
+
+        void Choose(string value)
+        {
+            if (value == shown) return;
+            if (!Commit(key, value)) return;
+            shown = value;
+            if (key == "ai.actionsProvider") _ = FitModelAndEffortAsync(value);
+        }
+
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (_loading || filling || combo.SelectedItem is not ComboBoxItem { Tag: string v }) return;
+            Choose(v);
+        };
+        if (isModel)
+        {
+            // A typed name is kept as it is; one that matches an item's label means that item.
+            void Typed()
+            {
+                var text = (combo.Text ?? "").Trim();
+                var item = combo.Items.OfType<ComboBoxItem>().FirstOrDefault(i => string.Equals(i.Content as string, text, StringComparison.OrdinalIgnoreCase));
+                Choose(item is { Tag: string v } ? v : text);
+            }
+            combo.LostFocus += (_, _) => Typed();
+            combo.KeyDown += (_, e) => { if (e.Key == Key.Enter) { e.Handled = true; Typed(); } };
+        }
+
+        show = v =>
+        {
+            var current = v is JsonValue jv && jv.TryGetValue<string>(out var str) ? str : "";
+            shown = current;
+            var configs = ai.Configs;
+            switch (key)
+            {
+                case "ai.chatProvider" or "ai.actionsProvider":
+                    Fill([("The first one in the list", "", "Whichever provider is first above (and switched on)"),
+                          .. configs.Select(c => (ProviderLabel(c, configs), c.Id, (string?)$"{ai.Kind(c.Kind)?.DisplayName ?? c.Kind} · id {c.Id}"))],
+                        current, "  (not set up)");
+                    break;
+                case "ai.actionsEffort":
+                {
+                    var p = ActionsProvider();
+                    var levels = p is null ? [] : ai.Kind(p.Kind)?.Capabilities.EffortLevels ?? [];
+                    Fill([("The provider's own", "", null), .. levels.Select(l => (l, l, (string?)null))], current, levels.Count == 0 ? "" : "  (not offered)");
+                    combo.IsEnabled = levels.Count > 0 || current.Length > 0;
+                    break;
+                }
+                default:
+                {
+                    var p = ActionsProvider();
+                    var run = ++generation;
+                    Fill([("The provider's own", "", null)], current, "");
+                    if (p is null) break;
+                    _ = Load();
+                    async Task Load()
+                    {
+                        var models = await ai.ModelsAsync(p.Id);
+                        if (run != generation || models.Count == 0) return;
+                        var items = models.Select(m => (m.Id.Length == 0 ? "The provider's own" : m.Name, m.Id, m.Note)).ToList();
+                        if (items.All(i => i.Id != "")) items.Insert(0, ("The provider's own", "", null));
+                        Fill(items, shown, "");
+                    }
+                    break;
+                }
+            }
+        };
+        return combo;
+    }
+
+    /// <summary>A provider's name in a list, with its kind when another provider has the same name, and whether it is off.</summary>
+    private static string ProviderLabel(AiProviderConfig c, IReadOnlyList<AiProviderConfig> all)
+    {
+        var kind = App.Services.Ai.Kind(c.Kind)?.DisplayName;
+        var label = c.Name;
+        if (kind is not null && all.Count(o => string.Equals(o.Name, c.Name, StringComparison.OrdinalIgnoreCase)) > 1) label += " · " + kind;
+        return c.Enabled ? label : label + "  (switched off)";
+    }
+
+    /// <summary>
+    /// After the AI Actions provider changes: a model or effort the new provider does not offer would make every action
+    /// fail, so those go back to the provider's own.
+    /// </summary>
+    private async Task FitModelAndEffortAsync(string providerId)
+    {
+        var ai = App.Services.Ai;
+        var settings = Config.Settings.Ai;
+        if ((providerId.Length > 0 ? ai.Config(providerId) : ai.DefaultProviderId is { } d ? ai.Config(d) : null) is not { } p) return;
+        var levels = ai.Kind(p.Kind)?.Capabilities.EffortLevels ?? [];
+        var model = settings.ActionsModel;
+        var effort = settings.ActionsEffort;
+        var reset = new List<string>();
+        if (effort.Length > 0 && !levels.Contains(effort)) { Commit("ai.actionsEffort", ""); reset.Add("effort"); }
+        if (model.Length > 0 && (await ai.ModelsAsync(p.Id)).All(m => m.Id != model)) { Commit("ai.actionsModel", ""); reset.Add("model"); }
+        if (reset.Count > 0) Ui.Toast(this, "AI Actions", $"{p.Name} does not offer {string.Join(" or ", reset.Select(r => r == "model" ? "the model " + model : "the effort " + effort))}, so it uses its own.");
     }
 
     private bool Commit(string key, string text)

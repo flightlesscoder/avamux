@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- AI Actions: a plugin built only against the plugin contract (Avamux.Plugin.Abstractions) and Avalonia, as any
+       plugin would be. It ships with avamux, which registers it as a built-in plugin; it can be switched off under
+       Settings → Plugins. Keep it free of references to Avamux.Core or the app: that is what keeps the contract honest. -->
+  <PropertyGroup>
+    <RootNamespace>Avamux.Plugins.AiActions</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.2" />
+    <ProjectReference Include="..\Avamux.Plugin.Abstractions\Avamux.Plugin.Abstractions.csproj" />
+    <InternalsVisibleTo Include="Avamux.UiTests" />
+  </ItemGroup>
+</Project>

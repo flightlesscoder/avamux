@@ -3,6 +3,8 @@ obj/
 .vs/
 .idea/
 *.user
+__pycache__/
+*.pyc
 avamux.local.json
 publish/
 Directory.Build.local.props

@@ -132,13 +132,15 @@ public sealed partial class CommandRegistry
             ["repositories"] = s.Repos.Items.Count,
             ["webServer"] = s.Web.BaseUrl,
         });
-        Add("app nav", $"Switch the window to a page: {string.Join(", ", Pages)}, or the name of a custom page.", [P("page", "Page name.", true)], a =>
+        Add("app nav", $"Switch the window to a page: {string.Join(", ", Pages)}, or the name of a custom page. Some pages take a part after a colon (workloads:models).", [P("page", "Page name.", true)], a =>
         {
             // A custom page (see `avamux page list`) is found by its exact name or key; built-in pages by a prefix.
             if (s.Nav.Find(a.Require("page")) is { Enabled: true } custom) { s.Host.Navigate(custom.Key); return custom.Name; }
-            var page = Pages.FirstOrDefault(p => p.StartsWith(a.Require("page"), StringComparison.OrdinalIgnoreCase))
+            // "page:part" opens a part of a page that has them (workloads:models, workloads:running:<workload id>).
+            var parts = a.Require("page").Split(':', 2);
+            var page = Pages.FirstOrDefault(p => p.StartsWith(parts[0], StringComparison.OrdinalIgnoreCase))
                 ?? throw new ArgumentException($"Unknown page '{a.Str("page")}'. Pages: {string.Join(", ", Pages.Concat(s.Nav.Pages.Where(p => p.Enabled).Select(p => p.Name)))}.");
-            s.Host.Navigate(page);
+            s.Host.Navigate(parts.Length > 1 ? page + ":" + parts[1] : page);
             return page;
         });
         Add("app boss", "Show the boss screen (or hide it again).", [F("off", "Hide it."), F("on", "Show it.")], a =>
@@ -283,6 +285,18 @@ public sealed partial class CommandRegistry
             text = TerminalManager.StripAnsi(text);
             if (a.Int("lines") is { } n) text = string.Join('\n', text.Split('\n').TakeLast(n));
             return text;
+        });
+        Add("terminal stats", "What a terminal's view is doing: output received and shown, how far behind it is, and how long recent key presses took to reach the screen.",
+            [P("id", "Terminal id or name.", true)], async a =>
+        {
+            var t = s.Terminals.Get(a.Require("id"));
+            var o = await s.Web.ViewStatsAsync(t.Id) ?? throw new InvalidOperationException("No view is showing this terminal.");
+            if (o["keyLatencyMs"] is JsonArray lat && lat.Count > 0)
+            {
+                var ms = lat.Select(x => x!.GetValue<double>()).Order().ToList();
+                o["keyLatency"] = new JsonObject { ["count"] = ms.Count, ["median"] = ms[ms.Count / 2], ["p90"] = ms[(int)(ms.Count * 0.9)], ["max"] = ms[^1] };
+            }
+            return o;
         });
         Add("terminal resize", "Set the size of a terminal that has no visible tab (the tab view otherwise controls it).",
             [P("id", "Terminal id or name.", true), P("cols", "Columns.", true), P("rows", "Rows.", true)], a =>

@@ -3,8 +3,10 @@
     <Project Path="src/Avamux/Avamux.csproj" />
     <Project Path="src/Avamux.Core/Avamux.Core.csproj" />
     <Project Path="src/Avamux.Plugin.Abstractions/Avamux.Plugin.Abstractions.csproj" />
+    <Project Path="src/Avamux.Plugins.AiActions/Avamux.Plugins.AiActions.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/menu-plugin/SampleMenuPlugin.csproj" />
     <Project Path="samples/page-plugin/SamplePagePlugin.csproj" />
     <Project Path="samples/watch-plugin/SampleWatchPlugin.csproj" />
   </Folder>

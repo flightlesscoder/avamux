@@ -24,7 +24,20 @@ public sealed class WatchService : IDisposable
         _state = JsonUtil.LoadFile<WatchState>(paths.StateFile("watches"));
         foreach (var p in new IWatchProvider[] { new CommandWatchProvider(), new GitHubPrWatchProvider(), new AdoPrWatchProvider(), new AdoWorkItemWatchProvider(), new AdoPipelineWatchProvider(), new RepoPullRequestWatchProvider(() => _config.Settings.Repositories.PullRequestCommand) })
             _providers[p.Kind] = p;
-        LoadPluginFolder();
+    }
+
+    /// <summary>Adds a watch kind from a plugin (the plugins folder is read by <see cref="Plugins.PluginService"/>).</summary>
+    public void AddProvider(IWatchProvider provider)
+    {
+        lock (_gate) _providers[provider.Kind] = provider;
+        Changed?.Invoke();
+    }
+
+    /// <summary>Takes a plugin's watch kind away again (the plugin was switched off).</summary>
+    public void RemoveProvider(IWatchProvider provider)
+    {
+        lock (_gate) if (_providers.TryGetValue(provider.Kind, out var p) && ReferenceEquals(p, provider)) _providers.Remove(provider.Kind);
+        Changed?.Invoke();
     }
 
     public event Action? Changed;
@@ -39,17 +52,6 @@ public sealed class WatchService : IDisposable
 
     public void Start() => _timer = new Timer(_ => Tick(), null, TimeSpan.FromSeconds(_config.Settings.Watching.CheckOnStartup ? 3 : 30), TimeSpan.FromSeconds(10));
 
-    private void LoadPluginFolder()
-    {
-        var count = 0;
-        foreach (var dll in Directory.EnumerateFiles(_paths.PluginsDir, "*.dll", SearchOption.AllDirectories))
-        {
-            try { foreach (var p in LoadProviders(dll)) _providers[p.Kind] = p; count++; }
-            catch (Exception ex) { Log.Warn("watch", $"Plugin {dll} not loaded: {ex.Message}"); }
-        }
-        Diagnostics.Timeline.Note("watch plugins loaded", count.ToString());
-    }
-
     private static readonly Dictionary<string, List<IWatchProvider>> AssemblyCache = new();
 
     public static List<IWatchProvider> LoadProviders(string assemblyPath)
@@ -59,26 +61,11 @@ public sealed class WatchService : IDisposable
         {
             if (AssemblyCache.TryGetValue(full, out var cached)) return cached;
             if (!File.Exists(full)) throw new FileNotFoundException($"Plugin assembly not found: {full}");
-            var ctx = new PluginLoadContext(full);
-            var asm = ctx.LoadFromAssemblyPath(full);
-            var list = asm.GetTypes()
-                .Where(t => typeof(IWatchProvider).IsAssignableFrom(t) && t is { IsAbstract: false, IsInterface: false })
+            var list = Plugins.PluginLoader.Implementing<IWatchProvider>(Plugins.PluginLoader.Types(Plugins.PluginLoader.Load(full)))
                 .Select(t => (IWatchProvider)Activator.CreateInstance(t)!).ToList();
             if (list.Count == 0) throw new InvalidOperationException($"{Path.GetFileName(full)} contains no IWatchProvider implementation.");
             Log.Info("watch", $"Loaded plugin {Path.GetFileName(full)}: {string.Join(", ", list.Select(p => p.Kind))}");
             return AssemblyCache[full] = list;
-        }
-    }
-
-    private sealed class PluginLoadContext(string path) : AssemblyLoadContext(isCollectible: false)
-    {
-        private readonly AssemblyDependencyResolver _resolver = new(path);
-        protected override Assembly? Load(AssemblyName name)
-        {
-            // Share the contract assembly with the host so interface identity matches.
-            if (name.Name == typeof(IWatchProvider).Assembly.GetName().Name) return typeof(IWatchProvider).Assembly;
-            var p = _resolver.ResolveAssemblyToPath(name);
-            return p is null ? null : LoadFromAssemblyPath(p);
         }
     }
 

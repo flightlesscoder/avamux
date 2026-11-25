@@ -38,20 +38,21 @@ Linux needs WebKitGTK 4.1 (`libwebkit2gtk-4.1`). macOS uses the system WKWebView
 
 | Page | What it does |
 |---|---|
-| Terminals | Tabbed terminals (xterm.js on a real pty). Tabs show what is running, or a name you give them (double-click), and a marker for what the terminal is doing: idle, running, an AI agent working, an AI agent waiting for input, or ended. Tabs can be moved to their own window and back (right-click, or the button at the end of the tab strip). Right-click → Split Right / Split Down starts a terminal beside or below the one you are typing in, in the same folder, as a pane of the same tab; drag the dividers between panes to resize them (double-click one to even it out). Panes without the keyboard are dimmed, the tab shows the pane you last typed in and how many it has, and its menu can even the panes out, move one to a tab of its own or close one. Closing the tab closes all its panes; Ctrl+Shift+W in a pane closes just that pane. `avamux terminal split [id] [--down]` does the same from the command line (run in a terminal, it splits that one). Ctrl+Shift+C / V copy and paste, Ctrl+Shift+T / W new and close tab, Ctrl+PageUp / PageDown switch tabs, Ctrl+Shift+L opens or hides the tab's browser. Every other key combination goes to the program. A browser can sit beside each tab, for you and for the AI agent in it: see [Browser panes](#browser-panes). |
-| Search | One box over wiki pages, events, watches, terminals, repositories, logs and settings. Pick which sources to include; click a result to open it where it lives. |
+| Terminals | Tabbed terminals (xterm.js on a real pty). Tabs show what is running, or a name you give them (double-click), and a marker for what the terminal is doing: idle, running, an AI agent working, an AI agent waiting for input, or ended. Tabs can be moved to their own window and back (right-click, or the button at the end of the tab strip). Right-click → Split Right / Split Down starts a terminal beside or below the one you are typing in, in the same folder, as a pane of the same tab; drag the dividers between panes to resize them (double-click one to even it out). Panes without the keyboard are dimmed, the tab shows the pane you last typed in and how many it has, and its menu can even the panes out, move one to a tab of its own or close one. Closing the tab closes all its panes; Ctrl+Shift+W in a pane closes just that pane. `avamux terminal split [id] [--down]` does the same from the command line (run in a terminal, it splits that one). Ctrl+Shift+C / V copy and paste, Ctrl+Shift+T / W new and close tab, Ctrl+PageUp / PageDown switch tabs, Ctrl+Shift+L opens or hides the tab's browser. Every other key combination goes to the program. A browser can sit beside each tab, for you and for the AI agent in it: see [Browser panes](#browser-panes). A program that writes faster than the view can show waits for it, as in any terminal, so Ctrl+C stops the screen at once instead of leaving it scrolling through a backlog. The CRT effect (`terminal.crt`) glows with `terminal.crtGlow`: `fast` (default, one soft halo over the text), `colour` (each character in its own colour, several times slower to draw: full-screen programs such as nvim lag) or `off`. |
+| Search | One box over wiki pages, wiki tags, events, watches, terminals, repositories, logs and settings. Pick which sources to include; click a result to open it where it lives. |
 | Today | Opens today's daily note in the wiki, creating it if needed. The name comes from `wiki.dailyNoteFormat` (default `yyyy-MM-dd dddd`, e.g. `2026-11-12 Thursday.md`) and `wiki.dailyNoteFolder` (default `Daily`). |
 | Settings | Every setting, which file it comes from, and which file to save changes to. Includes themes, the navigation bar style and the AI Workloads switches, and a Hotkeys list of every key avamux handles, page by page. |
 | Watching | Periodic checks with a status, summary, clickable/editable link and item list. |
 | Events | Timers, scheduled tasks and calendar events (multi-day, weekdays, weekly, monthly, yearly, fixed interval) that can run a script on start and on end. Events can have a location, file attachments, a colour and a markdown description. Month, Week and Day views; in Week and Day, events sit at their hours and overlapping ones share the column. A "Running now" section above the day's list shows events in progress and event scripts still running (with a Stop button). Skip a single occurrence of a repeating event (a holiday, a cancelled session) by right-clicking it on the calendar; skipped dates are listed in the editor, where they can be brought back. Double-click an event on the calendar to edit it, or an empty spot to add one. |
 | Dashboard | Your own HTML/CSS/JS from the dashboard folder, with developer tools, an Edit button that opens the folder in your editor, togglable extra CSS/JS sources, and `window.avamux` to control the app. |
 | Logs | App logs, crash reports, history of ended terminals, script output; retention by size (200 MB), age and count. |
-| Wiki | Markdown editor (coloured to match the theme, with undo/redo) and live preview with folders, links (`[[Page]]`), front matter, syntax-highlighted code blocks (with a copy button) and pictures. Edits are saved automatically after `wiki.autoSaveSeconds` without a change (`wiki.autoSave`). Paste a picture or drop any file onto a page: it is saved next to the page and linked. The editor shows a page's pictures too, each under the line that embeds it (`![alt](file.png)`, reference pictures and `<img>` tags, from the wiki, the web or `data:` addresses; not in code blocks), at most `wiki.editorPictureHeight` (220) pixels tall; turn it off with `wiki.editorPictures`. The text stays exactly as written: the arrow keys step over a picture, and clicking one selects its markdown to cut, copy or delete. In the preview, click a picture to zoom and pan; right-click it for Show in Folder, Copy and Copy Path. Also previews images, PDFs, audio, video, text files, CSV/TSV (as tables) and zip archives (as a listing), and opens anything else in its default app. Pictures, PDFs and recordings over `wiki.clickToPreviewMegabytes` (20) wait behind a "Load preview" button, and audio and video never start loading until played. Folders of more than 300 entries start closed and list their entries 500 at a time ("Show more"), so wikis of tens of thousands of files stay quick. Back and Forward buttons (also Alt+Left/Right and the mouse's side buttons) walk through the last 50 pages and files viewed. Entries can be opened in their own window. The last scroll position of recent files is remembered (`ui-state.json` in the data folder). The **Git** button keeps the wiki's history: commit, branches, history, and earlier versions of a page. See [The wiki in git](#the-wiki-in-git). |
+| Wiki | Markdown editor (coloured to match the theme, with undo/redo) and live preview with folders, links (`[[Page]]`), front matter, syntax-highlighted code blocks (with a copy button) and pictures. Edits are saved automatically after `wiki.autoSaveSeconds` without a change (`wiki.autoSave`). Paste a picture or drop any file onto a page: it is saved next to the page and linked. The editor shows a page's pictures too, each under the line that embeds it (`![alt](file.png)`, reference pictures and `<img>` tags, from the wiki, the web or `data:` addresses; not in code blocks), at most `wiki.editorPictureHeight` (220) pixels tall; turn it off with `wiki.editorPictures`. The text stays exactly as written: the arrow keys step over a picture, and clicking one selects its markdown to cut, copy or delete. In the preview, click a picture to zoom and pan; right-click it for Show in Folder, Copy and Copy Path. Also previews images, PDFs, audio, video, text files, CSV/TSV (as tables) and zip archives (as a listing), and opens anything else in its default app. Pictures, PDFs and recordings over `wiki.clickToPreviewMegabytes` (20) wait behind a "Load preview" button, and audio and video never start loading until played. Folders of more than 300 entries start closed and list their entries 500 at a time ("Show more"), so wikis of tens of thousands of files stay quick. Back and Forward buttons (also Alt+Left/Right and the mouse's side buttons) walk through the last 50 pages and files viewed. Write `#tag` anywhere in a page (or `tags: [a, b]` in its front matter) to tag it; `/` nests tags (`#avamux/browser`). The **Tags** switch above the folder tree lists every tag with its page count, nested ones under their parent; click one for its pages (filter them, sort by name or newest, include nested tags or not) and click a page to open it at the tag's line. Tags in the preview are links to that list, and the editor colours them. Tags in code, links and URLs, and headings (`# Title`), do not count. The index is kept in `wiki-tags.json` in the data folder and follows changes made outside avamux too, so a wiki of tens of thousands of pages starts in a fraction of a second. Entries can be opened in their own window. The last scroll position of recent files is remembered (`ui-state.json` in the data folder). The **Git** button keeps the wiki's history: commit, branches, history, and earlier versions of a page. See [The wiki in git](#the-wiki-in-git). |
 | Repos | Changes, history, branches and pull requests for one configured git repository or all of them. Stage or unstage files, hunks (right-click the coloured strip) or single lines (right-click a line number); diff or whole-file view; switch branches; inspect a commit file by file; cherry-pick, revert, reset, tag. Resolve merge conflicts in a three-way merge tool (see below). |
 | Git Activity | Where the work is going across hundreds of repositories: whole GitHub organisations, Azure DevOps organisations or projects, folders of clones, single URLs. Heatmaps you can pivot by anything (repositories, contributors, branches, languages, file types, frameworks, AI tools and models, days, weeks, weekdays, hours), leaderboards with trends, working rhythm, AI use, frameworks and languages, and the commits themselves. See [Git Activity](#git-activity). |
 | C# Interactive | A C# prompt that runs inside the running avamux, next to a screen of live controls built from XAML and from the C# you type. See [C# Interactive](#c-interactive). |
 | Caffeine | Keeps the computer awake until you turn it off, for a while (15 minutes to 8 hours, a length such as `1h30m`, or until a clock time), or while terminals are busy. See [Caffeine](#caffeine). |
-| AI Chat, Workloads | Placeholders, shown when switched on under Settings → AI Workloads. |
+| AI Chat | Conversations with coding agents: Claude Code, pi, and other agent command lines. Several chats, each with its own provider, model, effort and working folder; the model's thinking and tool calls; how full the context is; pictures and files pasted or dropped in; copy, edit (a message, sending it again as a new version, or a reply's text), speak (Kokoro) and insert into the wiki. See [AI Chat](#ai-chat). |
+| AI Workloads | Every model server, coding agent, queue job and AI task on this computer (and other machines plugins reach): start, stop and swap model servers, read their logs and why they failed, and the models on disk. See [AI Workloads](#ai-workloads). |
 | Your own | Pages you add under Settings → Custom pages: a terminal running one command, a web page, or a .NET plugin. See [Custom pages](#custom-pages). |
 
 ## Themes
@@ -393,6 +394,7 @@ A file only needs the keys it changes:
 avamux /?                      # also -?, --?, -h, --help, /help, help; works per group and per command
 avamux terminal new --name build -- dotnet watch
 avamux terminal send build "^C" --keys
+avamux terminal stats build      # output not yet shown, and how long recent key presses took to reach the screen
 avamux settings set terminal.scrollback 20000 --scope home-local
 avamux event timer 25m Focus --run "notify-send done"
 avamux event add Standup --start "tomorrow 9:30" --duration 15m --repeat weekly --days mon,tue,fri
@@ -404,6 +406,7 @@ avamux repo add . && avamux repo status
 avamux repo prs avamux --mine
 avamux search "release notes" --source wiki --source events
 avamux wiki today
+avamux wiki tags && avamux wiki tag avamux --exact   # tags with page counts; the pages carrying one
 avamux theme set classic90s
 avamux theme show synthwave-kat --file mine.yaml && avamux theme import mine.yaml --use
 avamux caffeine on --for 1h30m
@@ -454,6 +457,161 @@ A page that wants you (`avamux.needsInput`, `host.RequestAttention`, `avamux pag
 gets a dot on its navigation entry and a notification, unless it is the page you are looking at; the dot goes
 when you open the page. `avamux page badge <page> <text>` shows up to four characters on the entry.
 
+## AI Chat
+
+![A permission request waiting in AI Chat](docs/screenshots/ai/05-ai-chat-permission.png)
+
+AI Chat talks to coding agents that bring their own tools; avamux runs their command lines and shows what they do.
+The providers are under **Settings → AI Chat** (kept in `ai-providers.json` in the data folder): Claude Code and pi
+to start with, and any other agent's one-shot command line from a template (presets for Codex, Gemini CLI, opencode
+and aider; best effort, not tested here). Plugins can add kinds of provider (`IAiProvider`).
+
+- **Claude Code** runs as `claude -p` with stream-json both ways, one process per chat, signed in as you already are.
+  Nothing is restricted unless you set it: it asks before editing or running anything, as it does in a terminal,
+  and its permission requests and its questions (AskUserQuestion) show as cards above the message box:
+  Allow, Allow for this chat, or Deny with a reason; a question's options are buttons, with room to type your own.
+  Each provider can be given a permission mode, tools it may or may not use, extra folders, or full access.
+- **pi** runs in RPC mode with any model pi knows. avamux loads a small pi extension of its own that gives the model
+  an `ask_user` tool and, when set to, asks before chosen tools run.
+- **Per chat**: provider, model (a list, or type any name), effort or thinking level, and the folder the agent works
+  in (the wiki by default; `ai.chatFolder`). The ring in the header is how full the context is.
+- **Messages**: thinking is shown while it happens and folded away after ("Thought for 12 s"); each tool call is one
+  line that opens to show its input and output; replies are markdown with selectable text, code blocks with a copy
+  button, tables, and pictures (from markdown, or files the reply names by path) that open full size and can be saved,
+  copied or shown in their folder.
+- **Editing**: edit one of your messages to send it again; the old exchange stays, and ‹ 1/2 › switches between the
+  versions (Claude Code and pi branch their own conversation at that point). Retry writes a reply again the same way.
+  Edit a reply to change its saved text (nothing is sent; it is marked "edited").
+- **Attachments**: paste or drop pictures and files, or use the paperclip. Pictures go to models that take them as
+  pictures; other files are saved with the chat and named by path for the agent to read.
+- Chats are kept in `ai/chats/` in the data folder and carry on after a restart. Enter sends, Shift+Enter is a new
+  line, Esc stops the reply, Ctrl+N starts a new chat.
+
+```sh
+avamux ai providers                         # and: ai kinds, ai models <provider>, ai provider add|set|remove
+avamux ai provider set claude-code --allowed-tools "Read,Grep,Glob"   # limits are off unless set
+avamux ai run "Summarise the README in one line" --provider claude-code --model haiku
+avamux ai chat new "When did we decide on pre-navigation injection?"   # opens it in AI Chat
+avamux ai chat list && avamux ai chat send <chat> "And why?"
+```
+
+### Speaking replies (Kokoro)
+
+The speaker button on a reply reads it aloud with [Kokoro](https://github.com/thewh1teagle/kokoro-onnx), sentence by
+sentence (code blocks are skipped, and so is anything after a line that is only `---`). It is **off by default**:
+the first time something is to be spoken avamux asks whether to switch it on, or says what is missing if it is not set
+up. Point `ai.tts.python` at a Python that has `kokoro_onnx` installed and `ai.tts.model` / `ai.tts.voices` at the
+model and voices files (for example in `~/avamux.local.json`); `ai.tts.voice` picks the voice (`af_nova`), and
+`ai.tts.autoSpeak` reads every reply as it is written. A small helper keeps the model loaded and unloads it after
+`ai.tts.idleMinutes` (10) without speaking; switching `ai.tts.enabled` off, or quitting, ends it and anything playing.
+
+## AI Workloads
+
+AI Workloads is where everything that runs models or AI work shows up, whoever started it, and where avamux acts as
+the admin: it can stop anything it can see (asking first when it did not start it), start and swap model servers,
+and say why one failed.
+
+- **Running**: llama.cpp servers (and RPC servers, whisper.cpp, Ollama and its loaded models, LM Studio, vLLM,
+  Kokoro …), coding agents (Claude Code, pi: in avamux terminals, in AI Chat, anywhere), and AI containers, with their
+  port, context, GPU and RAM use, how long they have run and who started them. Open a row for its details and its log
+  (a server's log, a start script's output, an AI run's thinking and reply), followed live.
+- **Profiles** are ways to start a server: a **llama.cpp** server avamux launches itself (program, model, alias, port,
+  context, any other arguments); a **start/stop script pair** found in the folders named by `ai.workloadScripts` (the
+  script is the config: its `BIN`, `MODEL`, `PORT`, `CTX`, `ALIAS`, pid and log files are read from it and the files it
+  sources); any **command**; a remote llama.cpp **RPC server** (status, start, stop, restart and version commands, for
+  example over ssh); a hosted **API** (best effort; the key stays in an environment variable).
+- **Swapping**: profiles in one group (servers on this computer are in `gpu`) never run together, so starting one
+  first stops what holds the GPU or its port, and says so first, refusing while that one is answering a request
+  unless you insist. It also names other programs holding GPU memory (a game), and warns when a server is left with
+  less than 800 MiB of the card. Servers avamux starts keep running when it quits; closing the window asks whether to
+  stop them.
+- **Stopping** a script profile runs its stop script, then checks that the server really is gone (its process, and
+  nothing answering on its address). If the script reports success but the server is still there, avamux says so,
+  with the pid, and the row offers **End process** (SIGTERM, then SIGKILL). A process avamux may not signal, or one
+  that survives SIGKILL, is reported as not stopped, with the reason. The row says "Stopping…" from the click on (a
+  stop script can wait half a minute for the server to let go of the GPU), and every action and its outcome is
+  written to the app log.
+- **Why it failed**: the end of the log, read for the usual reasons (out of GPU memory, port in use, RPC built from
+  another commit, a missing library or model, an unknown architecture) in plain words.
+- **Tasks and jobs**: AI Chat replies and AI Actions in progress (stop them, or open the chat), recent runs and how
+  they ended, and jobs from queue plugins.
+- **Models on disk**: GGUF files (split ones counted once) with what their header says (architecture, size,
+  quantisation, context, layers, experts), plus safetensors, ONNX and whisper.cpp files, which profiles use each, and a
+  button that makes a llama.cpp profile from one. Searched in the usual places and `ai.workloadModels`.
+- **Plugins** add sources (`IWorkloadSource`: another machine's queue, its models and jobs) and leases
+  (`IWorkloadLeaseProvider`): a profile, or an RPC server it uses, can need a lease from another machine's queue before
+  it starts; it is released when the server stops, and losing it stops the server. A plugin can also teach AI Workloads
+  about a setup of its own (through `AppServices`): how its start scripts keep their settings
+  (`Workloads.ScriptConventions`), programs to recognise (`ProcessScanner.Recognisers`), container names
+  (`Workloads.ContainerPatterns`), something to do after a server starts (`Workloads.StartHooks`), which local server an
+  AI Chat provider talks to (`Workloads.EndpointResolvers`: a chat whose server is not answering then shows a bar that
+  starts a profile for that port), and variables its sessions need (`Ai.SessionEnvironment`).
+
+```sh
+avamux ai workloads list                 # what runs now (--all: stopped profiles, finished tasks too)
+avamux ai workloads profiles             # and: profile show|add|set|remove, folders
+avamux ai workloads swap my-model --ctx 65536   # stops what is in the way, waits until it answers
+avamux ai workloads logs local:profile:script:my-model
+avamux ai workloads stop local:pid:12345 # anything listed, stopped its own way
+avamux ai workloads models               # model files, with which profiles use them
+avamux app nav workloads:models          # open a tab (running, profiles, tasks, models)
+```
+
+## AI Actions
+
+| | |
+|---|---|
+| ![The Tags view beside the editor](docs/screenshots/ai/01-tags-view.png) | ![AI Actions in the preview's right-click menu](docs/screenshots/ai/02-ai-actions-in-the-preview.png) |
+| ![The AI Actions submenu](docs/screenshots/ai/03-ai-actions-menu.png) | ![Add Tags](docs/screenshots/ai/04-add-tags.png) |
+
+AI Actions is a plugin that comes with avamux (switch it off under Settings → Plugins). It adds an **AI Actions**
+submenu to the right-click menus of the wiki's editor, preview and folder tree, and of terminals. Actions that only
+produce text run without tools and change nothing until you say so; their provider, model and effort are
+`ai.actionsProvider` / `ai.actionsModel` / `ai.actionsEffort` (Claude Code, Haiku, low).
+
+| Action | What it does |
+|---|---|
+| Add Tags | Suggests 3 to 7 #tags for the page, preferring tags the wiki already uses. Untick any you do not want and add your own; they go into the page's front matter `tags:` if it has one, else onto a `Tags:` line at the end. One undo step. |
+| Summarize | The selection, or the page, summarised in a window as it is written: Copy, Insert Below, Speak, or **Open in AI Chat** to carry the conversation on. |
+| Format / Rewrite… | Tidies the markdown without changing what it says, or rewrites it as you ask (shorter, friendlier, as a list …). Shows the change line by line first; Accept makes it as one undo step. |
+| Ask About This Page… / Folder…, Do Research… | Opens AI Chat on a conversation set up to answer from the wiki: it searches the pages, reads them, and names the pages it used. Ask it anything; it can also use the `avamux` command line to add what it found to a page or work with terminals, when you ask it to. |
+| Send Selection to a Terminal… | Types the selected text into a terminal. |
+| Explain Selection, Ask in AI Chat…, Copy Selection into a Wiki Page… | In a terminal's menu, for the selected output. |
+
+**Your own actions** are set up under Settings → Plugins → AI Actions: a name, the menus it shows in, a prompt with
+`{{selection}}`, `{{page}}`, `{{pagePath}}`, `{{tags}}`, `{{allTags}}` and `{{input}}` (asked for when it runs), what
+happens to the reply (a window, replace the selection after showing the change, insert below, a new chat, a new page),
+and optionally its own provider, model, effort and whether it may use tools. They are kept in
+`plugin-data/ai-actions/actions.json` in the data folder. `avamux wiki tags add <page> <tags…>` adds tags the same
+way from the command line.
+
+## Plugins
+
+A plugin is a .NET class library that adds to avamux without necessarily adding a page: right-click menu items (with
+submenus) in the wiki editor, the wiki preview, the wiki's folder tree and terminals; watch kinds; AI chat providers;
+a settings panel of its own. Implement `Avamux.Plugins.IAvamuxPlugin` (project `src/Avamux.Plugin.Abstractions`) and
+register what it adds in `Activate(IPluginContext context)`: `AddMenuItems`, `AddWatchProvider`, `AddAiProvider`,
+`AddSettingsView`. Menu items get a `MenuContext` each time a menu opens: which menu, the page or terminal, the selected
+text and, in the wiki, the open page (`IWikiEditor`: read it, replace the selection or the whole page as one undo
+step, insert below). The context also runs avamux commands, asks questions, opens windows and runs AI prompts
+(`context.Ai`). `samples/menu-plugin/` is a complete pageless plugin.
+
+**Settings → Plugins** lists every plugin: the built-in ones (AI Actions), those in the plugins folder (each in a
+folder of its own, or a single DLL as watch plugins were before), and page plugins from Custom pages. It shows what each
+adds, and switches them on and off, reloads them after a rebuild, installs (Install… copies the DLL and what it needs
+into `plugins/<id>/`) and uninstalls them. Switching one off takes what it added away at once; .NET cannot unload an
+assembly, so its code stays in memory until avamux restarts (the list says so). Which plugins are off is kept in
+`plugins.json` in the data folder.
+
+```sh
+dotnet build samples/menu-plugin
+avamux plugin install samples/menu-plugin/bin/Debug/net10.0/SampleMenuPlugin.dll
+avamux plugin list
+avamux plugin disable sample-menu && avamux plugin enable sample-menu
+avamux plugin reload sample-menu      # after copying a new build over plugins/sample-menu/
+avamux plugin uninstall sample-menu
+```
+
 ## Watches are pluggable
 
 Built-in kinds: `github-pr`, `ado-pr`, `ado-pbi`, `ado-pipeline`, `repo-pr`, `command`, `plugin` (`avamux watch kinds`).
@@ -470,5 +628,6 @@ The GitHub and Azure DevOps kinds follow the public REST APIs but have not been 
   Watch settings arrive as `AVAMUX_WATCH_<KEY>` environment variables.
 
 - **.NET plugin**: implement `Avamux.Plugins.IWatchProvider` (project `src/Avamux.Plugin.Abstractions`) and drop
-  the DLL into the plugins folder, or point a `plugin` watch at it with `--set assembly=/path/to.dll`.
+  the DLL into the plugins folder (it is then listed under Settings → Plugins), or point a `plugin` watch at it with
+  `--set assembly=/path/to.dll`. An `IAvamuxPlugin` can add watch kinds too (see [Plugins](#plugins)).
   `samples/watch-plugin/` is a complete example.

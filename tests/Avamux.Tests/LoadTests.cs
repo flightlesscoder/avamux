@@ -173,6 +173,52 @@ public class LoadTests(ITestOutputHelper output)
     }
 
     [LoadFact]
+    public async Task Tagging_a_wiki_of_thousands_of_pages()
+    {
+        using var box = new Sandbox();
+        var wiki = new WikiService(box.Paths);
+        var pages = Load.N(10_000);
+        var body = Load.Markdown(4_000);
+        // Every other page carries #common (a tag on thousands of pages); each also has its own tag and a nested one.
+        var s = Load.Measure(() =>
+        {
+            for (var i = 0; i < pages; i++)
+            {
+                var folder = Path.Combine(wiki.Root, $"Folder {i % 50}");
+                Directory.CreateDirectory(folder);
+                File.WriteAllText(Path.Combine(folder, $"Page {i}.md"), body + $"\n\n{(i % 2 == 0 ? "#common " : "")}#own{i} #area/sub{i % 20}\n");
+            }
+        });
+        Check($"write {pages} tagged pages (setup)", s, budgetMs: null);
+
+        var index = new WikiTagIndex(wiki, box.Paths);
+        s = Load.Measure(() => index.RefreshAsync().GetAwaiter().GetResult());
+        Check($"index tags of {pages} pages from scratch", s, budgetMs: 8000 * Load.Scale, note: "in the background at first start");
+        index.Dispose(); // writes the cache
+
+        using var again = new WikiTagIndex(wiki, box.Paths);
+        var load = typeof(WikiTagIndex).GetMethod("LoadCache", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        s = Load.Measure(() => { load.Invoke(again, null); again.RefreshAsync().GetAwaiter().GetResult(); });
+        Check($"start again from the cache over {pages} pages", s, budgetMs: 1500 * Load.Scale, note: "every later start");
+        Assert.Equal(pages + 1, again.PageCount); // and Home.md
+
+        List<TagHit> hits = [];
+        s = Load.Measure(() => hits = again.Pages("common"));
+        Check($"pages of a tag on {pages / 2} pages", s, budgetMs: 150 * Load.Scale, note: "opening a tag in the Tags view");
+        Assert.Equal((pages + 1) / 2, hits.Count);
+        s = Load.Measure(() => hits = again.Pages("area"));
+        Check($"pages under a parent of 20 nested tags ({pages} pages)", s, budgetMs: 250 * Load.Scale);
+        Assert.Equal(pages, hits.Count);
+        List<TagCount> tags = [];
+        s = Load.Measure(() => tags = again.Tags());
+        Check($"list {pages + 21} tags", s, budgetMs: 150 * Load.Scale);
+        s = Load.Measure(() => { for (var i = 0; i < 100; i++) wiki.Write($"Folder 0/Page {i * 50}.md", body + $"\n#edited{i}\n"); });
+        s = Load.Measure(() => { for (var i = 0; i < 100; i++) again.UpdateAsync($"Folder 0/Page {i * 50}.md").GetAwaiter().GetResult(); });
+        Check("re-read 100 edited pages", s, budgetMs: 300 * Load.Scale, note: "after each save");
+        Assert.Single(again.Pages("edited7"));
+    }
+
+    [LoadFact]
     public void Importing_the_same_file_name_again_and_again()
     {
         using var box = new Sandbox();

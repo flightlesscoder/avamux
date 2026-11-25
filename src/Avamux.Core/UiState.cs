@@ -27,6 +27,8 @@ public sealed class UiStateData
     public List<string> ChangesCollapsed { get; set; } = [];
     /// <summary>Whether the three panes of the merge tool scroll together.</summary>
     public bool MergeSyncScroll { get; set; } = true;
+    /// <summary>What the wiki's left pane shows: "explorer" (the folder tree) or "tags".</summary>
+    public string WikiPane { get; set; } = "explorer";
     /// <summary>Most recently used last.</summary>
     public List<WikiPosition> WikiPositions { get; set; } = [];
 }

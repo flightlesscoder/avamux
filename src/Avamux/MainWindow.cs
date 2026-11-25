@@ -31,7 +31,7 @@ public sealed class MainWindow : AppWindow
         new("caffeine", "Caffeine", "Caffeine: keep the computer awake", Icons.Coffee),
         new("system", "System", "System: CPU, memory, GPU, and what takes the space on each disk", Icons.Chip),
         new("chat", "AI Chat", "AI Chat", Icons.Forum),
-        new("workloads", "Workloads", "Workloads: providers, work queues and models", Icons.Server),
+        new("workloads", "AI Workloads", "AI Workloads: model servers, agents, queues and models on disk", Icons.Server),
     ];
 
     private readonly Dictionary<string, Control> _pages = new();
@@ -152,6 +152,11 @@ public sealed class MainWindow : AppWindow
     public string CurrentPage { get; private set; } = "terminals";
 
     public T? Page<T>(string key) where T : Control => GetOrCreate(key) as T;
+
+    /// <summary>The pages in the navigation, in its order: key, name and icon (the command palette's "Go to").</summary>
+    public IReadOnlyList<(string Key, string Label, Geometry Icon)> Destinations() =>
+        NavItems.Where(i => IsShown(i.Key) && i.Key != "today").Select(i => (i.Key, i.Tip.Split(':')[0], (Geometry)i.Icon))
+            .Concat(Custom.Pages.Where(p => p.Enabled).Select(p => (p.Key, p.Name, (Geometry)CustomPages.IconFor(p)))).ToList();
 
     /// <summary>The AI pages are only in the navigation when switched on under Settings → AI Workloads.</summary>
     private static bool IsShown(string key)
@@ -315,6 +320,13 @@ public sealed class MainWindow : AppWindow
 
     public void Navigate(string key)
     {
+        // "page:part": the page, then the part of it (a tab, an item) for pages that have parts.
+        if (key.IndexOf(':') is var colon and > 0 && ResolvePage(key[..colon]) is { } owner && CommandRegistry.Pages.Contains(owner))
+        {
+            Navigate(owner);
+            if (Page<Control>(owner) is ISubPage sub) sub.OpenPart(key[(colon + 1)..]);
+            return;
+        }
         if (ResolvePage(key) is { } resolved) key = resolved;
         if (key == "today") { OpenToday(); return; }
         // A page whose navigation entry is hidden can still be shown (from the CLI, say); nothing is selected then.
@@ -373,10 +385,56 @@ public sealed class MainWindow : AppWindow
         _toastPopup.IsOpen = IsVisible;
         DispatcherTimer.RunOnce(Remove, TimeSpan.FromSeconds(6));
     }
+
+    private bool _serversAsked;
+
+    /// <summary>
+    /// When the window is closed by hand and servers avamux started are still running: "Close AI servers?" (stop them,
+    /// leave them running, or stay). They outlive avamux otherwise, as model servers started any other way do.
+    /// </summary>
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        if (!_serversAsked && e.CloseReason == WindowCloseReason.WindowClosing && !e.IsProgrammatic && App.Services.Workloads.MayHaveStarted)
+        {
+            e.Cancel = true;
+            _ = AskAboutServersAsync();
+        }
+        base.OnClosing(e);
+    }
+
+    private async Task AskAboutServersAsync()
+    {
+        IReadOnlyList<Avamux.Core.Workloads.WorkloadEntry> running;
+        try { running = await Task.Run(() => App.Services.Workloads.RunningStartedByAvamuxAsync()).WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch { running = []; }
+        _serversAsked = true;
+        if (running.Count == 0) { Close(); return; }
+        var list = new StackPanel { Spacing = 3 };
+        foreach (var e in running)
+            list.Children.Add(Ui.Text("• " + e.Info.Name + (e.Info.VramMiB is { } v ? $" ({v / 1024.0:0.0} GB of GPU memory)" : ""), size: 12.5));
+        if (App.Services.Workloads.HeldLeases.Count > 0)
+            list.Children.Add(Ui.Text("Leases avamux holds on other machines for them end when avamux quits.", "dim", 12));
+        var choice = await Ui.ChoiceAsync(this, "Close AI servers?", running.Count == 1 ? "avamux started this server, and it is still running:" : "avamux started these servers, and they are still running:",
+            list, ("Cancel", false), ("Leave Running", false), ("Stop and Quit", true));
+        if (choice is null or 0) { _serversAsked = false; return; }
+        if (choice == 2)
+        {
+            Toast("Stopping AI servers", "avamux quits when they have stopped.");
+            try { await Task.Run(() => App.Services.Workloads.StopAllStartedAsync()).WaitAsync(TimeSpan.FromSeconds(90)); }
+            catch (Exception ex) { Avamux.Core.Logging.Log.Warn("workloads", "Stopping servers on quit: " + ex.Message); }
+        }
+        Close();
+    }
 }
 
 /// <summary>Pages that want to refresh when they become visible.</summary>
 public interface IPage
 {
     void OnShown();
+}
+
+/// <summary>A page with parts (tabs, items) that navigation can open: <c>avamux app nav page:part</c>.</summary>
+public interface ISubPage
+{
+    void OpenPart(string part);
 }

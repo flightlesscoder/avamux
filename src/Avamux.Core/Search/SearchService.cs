@@ -15,7 +15,7 @@ public sealed class SearchService(AppServices app)
 {
     public static readonly (string Key, string Label)[] Sources =
     [
-        ("wiki", "Wiki"), ("events", "Events"), ("watches", "Watches"), ("terminals", "Terminals"),
+        ("wiki", "Wiki"), ("tags", "Tags"), ("events", "Events"), ("watches", "Watches"), ("terminals", "Terminals"),
         ("repositories", "Repositories"), ("logs", "Logs"), ("settings", "Settings"),
     ];
 
@@ -51,6 +51,7 @@ public sealed class SearchService(AppServices app)
             }, ct));
         }
         Run("wiki", () => Wiki(q, ct));
+        Run("tags", () => Tags(q));
         Run("events", () => Events(q));
         Run("watches", () => Watches(q));
         Run("terminals", () => Terminals(q));
@@ -61,6 +62,21 @@ public sealed class SearchService(AppServices app)
         ct.ThrowIfCancellationRequested();
         var order = Sources.Select((s, i) => (s.Key, i)).ToDictionary(x => x.Key, x => x.i);
         return results.SelectMany(r => r.Take(PerSource)).OrderBy(h => order.GetValueOrDefault(h.Source, 99)).ToList();
+    }
+
+    /// <summary>Pages carrying a tag whose name holds the query ("#" optional): the tag's first line on each.</summary>
+    private List<SearchHit> Tags(string q)
+    {
+        var key = WikiTags.Normalize(q);
+        if (key.Length == 0) return [];
+        var hits = new List<SearchHit>();
+        foreach (var tag in app.Tags.Tags().Where(t => t.Key.Contains(key, StringComparison.Ordinal)).OrderBy(t => t.Key == key ? 0 : 1))
+            foreach (var hit in app.Tags.Pages(tag.Key, nested: false))
+            {
+                if (hits.Count >= PerSource) return hits;
+                hits.Add(new SearchHit("tags", hit.Page, "#" + tag.Name + " · " + hit.Snippet, hit.Page, Line: hit.Line));
+            }
+        return hits;
     }
 
     private List<SearchHit> Wiki(string q, CancellationToken ct)

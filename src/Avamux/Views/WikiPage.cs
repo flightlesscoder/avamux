@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -57,6 +58,9 @@ public sealed class WikiPage : UserControl, IPage
     private readonly Grid _split = new() { ColumnDefinitions = new ColumnDefinitions("*,*") };
     private readonly Grid _layout = new() { ColumnDefinitions = new ColumnDefinitions("250,*") };
     private readonly Border _editorHost, _previewHost, _treeHost;
+    private readonly WikiTagsPane _tagsPane;
+    private readonly DockPanel _explorer;
+    private readonly Button _explorerTab, _tagsTab;
     private readonly Action _renderSoon;
     private readonly HashSet<string> _collapsed = [];
     private readonly HashSet<string> _opened = [];   // big folders the user opened (they start closed)
@@ -71,6 +75,9 @@ public sealed class WikiPage : UserControl, IPage
     private string? _selectedFolder;  // folder new pages go into
     private string _saved = "";
     private bool _loading, _previewReady, _buildingTree, _editable;
+    /// <summary>An entry's right-click menu is open: the tree is not built again under it (it would close), only once it closes.</summary>
+    private ContextMenu? _treeMenu;
+    private bool _treeStale;
     private int _mode = 1;            // 0 edit, 1 split, 2 preview — the user's choice for editable files
     private double? _pendingPreviewScroll;
     private DateTime _lastOwnWrite;
@@ -78,6 +85,9 @@ public sealed class WikiPage : UserControl, IPage
     private static WikiService Wiki => App.Services.Wiki;
     private static UiStateStore State => App.Services.Ui;
     private bool Dirty => _path is not null && _editable && _editor.Text != _saved;
+
+    /// <summary>The wiki path of the file open, if any.</summary>
+    public string? CurrentPath => _path;
 
     /// <summary>Raised with the wiki path whenever another file is opened.</summary>
     public event Action<string?>? Opened;
@@ -135,6 +145,32 @@ public sealed class WikiPage : UserControl, IPage
         foreach (var (item, keys) in new[] { (cut, "Ctrl+X"), (copy, "Ctrl+C"), (paste, "Ctrl+V"), (undo, "Ctrl+Z"), (redo, "Ctrl+Y"), (selectAll, "Ctrl+A") })
             item.InputGesture = KeyGesture.Parse(keys);
         foreach (var o in new object[] { undo, redo, new Separator(), cut, copy, paste, delete, new Separator(), selectAll }) editMenu.Items.Add(o);
+        // A link under the pointer (or the caret, for the menu key) puts its own items at the top, as in the preview.
+        var linkItems = new List<Control>();
+        editMenu.Opening += (_, _) =>
+        {
+            foreach (var old in linkItems) editMenu.Items.Remove(old);
+            linkItems.Clear();
+            var link = _menuPoint is { } at ? LinkAtPoint(at) : LinkAtOffset(_editor.CaretOffset);
+            _menuPoint = null;
+            if (link is not null)
+            {
+                linkItems.AddRange(LinkMenuItems(link));
+                linkItems.Add(new Separator());
+                for (var i = 0; i < linkItems.Count; i++) editMenu.Items.Insert(i, linkItems[i]);
+            }
+        };
+        _editor.TextArea.AddHandler(PointerPressedEvent, (_, e) =>
+        {
+            var point = e.GetCurrentPoint(_editor);
+            if (point.Properties.IsRightButtonPressed) _menuPoint = point.Position;
+            // Ctrl+click follows a link (a plain click places the caret, as in any editor).
+            else if (point.Properties.IsLeftButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Control) && LinkAtPoint(point.Position) is { } link)
+            {
+                e.Handled = true;
+                FollowLink(link);
+            }
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         editMenu.Opening += (_, _) =>
         {
             var selected = _editor.SelectionLength > 0;
@@ -146,9 +182,16 @@ public sealed class WikiPage : UserControl, IPage
             redo.IsEnabled = writable && _editor.CanRedo;
         };
         _editor.TextArea.ContextMenu = editMenu;
+        // Plugins (AI Actions …) add their items at the end, asked afresh each time the menu opens.
+        PluginMenus.Attach(editMenu, () => _path is null ? null : new Avamux.Plugins.MenuContext
+        {
+            Menu = Avamux.Plugins.Menus.WikiEditor, WikiPath = _path, SelectedText = _editor.SelectedText, Editor = _editable ? EditorAccess : null,
+        });
         _editor.TextArea.TextView.ScrollOffsetChanged += (_, _) =>
         {
             if (!_loading && _path is not null && _editable) State.RememberWiki(_path, editor: _editor.VerticalOffset, caret: _editor.CaretOffset);
+            // The preview follows, unless this scroll is the editor following the preview.
+            if (!_loading && DateTime.UtcNow > _editorQuietUntil) QueueSyncPreview();
         };
         _autoSave.Tick += (_, _) => { _autoSave.Stop(); if (Dirty) Save(); };
         // Alt+Left / Alt+Right and the mouse's back and forward buttons walk the history.
@@ -170,6 +213,12 @@ public sealed class WikiPage : UserControl, IPage
         // handled them already as a text drop: listen to handled ones too.
         AddHandler(DragDrop.DragOverEvent, OnDragOver, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(DragDrop.DropEvent, OnDrop, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+        // A right-click opens an entry's menu without picking the entry: picking a page opens it, which builds the
+        // tree again and takes away the entry the menu was for.
+        _tree.AddHandler(PointerPressedEvent, (_, e) =>
+        {
+            if (e.GetCurrentPoint(_tree).Properties.IsRightButtonPressed) e.Handled = true;
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         _tree.SelectionChanged += (_, _) =>
         {
             if (_buildingTree || (_tree.SelectedItem as TreeViewItem)?.Tag is not WikiNode node) return;
@@ -221,7 +270,21 @@ public sealed class WikiPage : UserControl, IPage
             },
         };
 
-        _treeHost = new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 1, 0), Background = Ui.Tk("bgSide"), Child = new DockPanel { Children = { treeBar.Dock(Dock.Top), _tree } } };
+        _explorer = new DockPanel { Children = { treeBar.Dock(Dock.Top), _tree } };
+        _tagsPane = new WikiTagsPane((page, line) => Open(page, line));
+        _explorerTab = PaneTab(Icons.FileTree, "Explorer", "The wiki's folders and files", "explorer");
+        _tagsTab = PaneTab(Icons.Tag, "Tags", "Every #tag in the wiki, and the pages carrying each", "tags");
+        var paneSwitch = new Border
+        {
+            Padding = new Thickness(6, 4, 6, 0), BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 0, 1),
+            Child = Ui.Row(2, _explorerTab, _tagsTab),
+        };
+        _treeHost = new Border
+        {
+            BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 0, 1, 0), Background = Ui.Tk("bgSide"),
+            Child = new DockPanel { Children = { paneSwitch.Dock(Dock.Top), new Panel { Children = { _explorer, _tagsPane } } } },
+        };
+        ShowPane(State.Data.WikiPane);
         _layout.Children.Add(_treeHost);
         _layout.Children.Add(new DockPanel { Children = { editBar.Dock(Dock.Top), _split } }.At(0, 1));
         if (_standalone) { _layout.ColumnDefinitions = new ColumnDefinitions("0,*"); _treeHost.IsVisible = false; }
@@ -246,6 +309,35 @@ public sealed class WikiPage : UserControl, IPage
         BuildTree();
         Open(standalone ?? Wiki.FindPage("Home") ?? Wiki.Pages().FirstOrDefault(WikiService.IsMarkdown));
     }
+
+    private Button PaneTab(Geometry icon, string label, string tip, string pane)
+    {
+        var b = new Button { Classes = { "tab" }, Padding = new Thickness(10, 4), Content = Ui.Row(5, new PathIcon { Data = icon, Width = 12, Height = 12 }, new TextBlock { Text = label, FontSize = 12.5 }) };
+        ToolTip.SetTip(b, tip);
+        b.Click += (_, _) => ShowPane(pane);
+        return b;
+    }
+
+    /// <summary>Shows the folder tree ("explorer") or the Tags view in the left pane, and remembers the choice.</summary>
+    public void ShowPane(string pane)
+    {
+        var tags = pane == "tags";
+        _explorer.IsVisible = !tags;
+        _tagsPane.IsVisible = tags;
+        _explorerTab.Classes.Set("on", !tags);
+        _tagsTab.Classes.Set("on", tags);
+        if (State.Data.WikiPane != (tags ? "tags" : "explorer")) { State.Data.WikiPane = tags ? "tags" : "explorer"; State.SaveSoon(); }
+    }
+
+    /// <summary>Switches the left pane to Tags and lists the pages carrying <paramref name="tag"/>.</summary>
+    public void ShowTag(string tag)
+    {
+        if (_standalone) return;
+        ShowPane("tags");
+        _tagsPane.Show(tag);
+    }
+
+    internal WikiTagsPane TagsPane => _tagsPane;
 
     /// <summary>
     /// A see-through selection in the accent colour: the markdown's own colours stay readable under it (links are
@@ -305,6 +397,7 @@ public sealed class WikiPage : UserControl, IPage
     private void BuildTree()
     {
         if (_standalone) return;
+        if (_treeMenu is not null) { _treeStale = true; return; }
         _buildingTree = true;
         try
         {
@@ -403,11 +496,13 @@ public sealed class WikiPage : UserControl, IPage
             menu.Items.Add(Ui.Item("Open in New Window", () => WikiWindow.Show(node.Path, this), icon: Icons.OpenInNew));
             menu.Items.Add(Ui.Item("Open in Default App", () => Shell.Open(Wiki.Resolve(node.Path))));
             menu.Items.Add(new Separator());
+            menu.Items.Add(Ui.Item("New Folder…", () => _ = NewFolderAsync(FolderOf(node.Path)))); // beside the page
+            menu.Items.Add(new Separator());
         }
         else
         {
-            menu.Items.Add(Ui.Item("New Page Here…", () => { _selectedFolder = node.Path; _ = NewPageAsync(); }));
-            menu.Items.Add(Ui.Item("New Folder Here…", () => { _selectedFolder = node.Path; _ = NewFolderAsync(); }));
+            menu.Items.Add(Ui.Item("New Page Here…", () => _ = NewPageAsync(node.Path)));
+            menu.Items.Add(Ui.Item("New Folder Here…", () => _ = NewFolderAsync(node.Path)));
             menu.Items.Add(new Separator());
         }
         menu.Items.Add(Ui.Item("Show in Folder", () => Shell.ShowInFolder(Wiki.Resolve(node.Path))));
@@ -415,6 +510,20 @@ public sealed class WikiPage : UserControl, IPage
         menu.Items.Add(new Separator());
         menu.Items.Add(Ui.Item("Rename or Move…", () => { _ = RenameAsync(node); }));
         menu.Items.Add(Ui.Item("Delete…", () => { _ = DeleteAsync(node); }));
+        PluginMenus.Attach(menu, () => new Avamux.Plugins.MenuContext
+        {
+            Menu = Avamux.Plugins.Menus.WikiTree, WikiPath = node.Path, IsFolder = node.IsFolder,
+            Editor = !node.IsFolder && node.Path == _path && _editable ? EditorAccess : null,
+        });
+        menu.Opened += (_, _) => _treeMenu = menu;
+        menu.Closed += (_, _) =>
+        {
+            if (_treeMenu != menu) return;
+            _treeMenu = null;
+            if (!_treeStale) return;
+            _treeStale = false;
+            Dispatcher.UIThread.Post(() => { if (VisualRoot is not null) BuildTree(); }); // shown again later builds it anyway
+        };
         return menu;
     }
 
@@ -487,7 +596,7 @@ public sealed class WikiPage : UserControl, IPage
                 try
                 {
                     if (line > 0) { _editor.CaretOffset = caret; _editor.Select(caret, Math.Min(_saved.Length, EndOfLine(_saved, caret)) - caret); _editor.ScrollToLine(line); }
-                    else _editor.ScrollToVerticalOffset(editorOffset);
+                    else _editor.ScrollEditorTo(editorOffset);
                 }
                 finally { _loading = false; }
             }, DispatcherPriority.Background);
@@ -596,7 +705,7 @@ public sealed class WikiPage : UserControl, IPage
         try
         {
             if (path is null) html = "<p class=\"dim\">Select or create a page.</p>";
-            else if (WikiService.IsMarkdown(path)) html = WikiService.Render(_editor.Text);
+            else if (WikiService.IsMarkdown(path)) html = WikiService.Render(_editor.Text, sourceLines: true);
             else
             {
                 var text = _editable ? _editor.Text : null; // read on this thread; rendering happens on another
@@ -609,10 +718,139 @@ public sealed class WikiPage : UserControl, IPage
         var scroll = _pendingPreviewScroll ?? 0;
         try
         {
-            await _preview.InvokeScript($"(function(){{ setContent({JsonSerializer.Serialize(html)}, {JsonSerializer.Serialize(folder)}, {JsonSerializer.Serialize(path ?? "")}, {scroll.ToString(System.Globalization.CultureInfo.InvariantCulture)}); return 'ok'; }})()");
+            await _preview.InvokeScript($"(function(){{ syncEnabled = {(SyncActive ? "true" : "false")}; setContent({JsonSerializer.Serialize(html)}, {JsonSerializer.Serialize(folder)}, {JsonSerializer.Serialize(path ?? "")}, {scroll.ToString(System.Globalization.CultureInfo.InvariantCulture)}); return 'ok'; }})()");
+            // Side by side, the new text is shown where the editor is.
+            QueueSyncPreview();
             Avamux.Core.Diagnostics.Timeline.Note("wiki rendered", path);
         }
         catch (Exception ex) { Log.Warn("wiki", "Preview update failed: " + ex.Message); }
+    }
+
+    private readonly PluginMenus.WebMenu _previewMenu = new();
+
+    private async Task AddPreviewMenuItemsAsync(string selection)
+    {
+        var items = _previewMenu.Items(new Avamux.Plugins.MenuContext
+        {
+            Menu = Avamux.Plugins.Menus.WikiPreview, WikiPath = _path, SelectedText = selection, Editor = _editable ? EditorAccess : null,
+        });
+        if (items.Count == 0) return;
+        try { await _preview.InvokeScript($"(function(){{ addMenuItems({items.ToJsonString()}); return 'ok'; }})()"); }
+        catch (Exception ex) { Log.Warn("wiki", "Could not add plugin items to the preview's menu: " + ex.Message); }
+    }
+
+    private EditorBridge? _editorAccess;
+    /// <summary>The open page as plugins see it (<see cref="Avamux.Plugins.IWikiEditor"/>).</summary>
+    internal Avamux.Plugins.IWikiEditor EditorAccess => _editorAccess ??= new EditorBridge(this);
+
+    private sealed class EditorBridge(WikiPage page) : Avamux.Plugins.IWikiEditor
+    {
+        private TextEditor Editor => page._editor;
+        public string Path => page._path ?? "";
+        public string Text => Editor.Text;
+        public string SelectedText => Editor.SelectedText;
+        public bool IsReadOnly => !page._editable || Editor.IsReadOnly;
+
+        private void Check()
+        {
+            if (IsReadOnly) throw new InvalidOperationException("This page cannot be edited here.");
+        }
+
+        public void ReplaceSelection(string text)
+        {
+            Check();
+            Editor.TextArea.Selection.ReplaceSelectionWithText(text);
+            Editor.Focus();
+        }
+
+        public void ReplaceText(string text)
+        {
+            Check();
+            var offset = Editor.VerticalOffset;
+            var caret = Math.Min(Editor.CaretOffset, text.Length);
+            var doc = Editor.Document;
+            doc.BeginUpdate();
+            try { doc.Replace(0, doc.TextLength, text); }
+            finally { doc.EndUpdate(); }
+            Editor.CaretOffset = caret;
+            Editor.ScrollEditorTo(offset);
+        }
+
+        public void InsertAfterSelection(string text)
+        {
+            Check();
+            var doc = Editor.Document;
+            var end = Editor.SelectionLength > 0 ? Editor.SelectionStart + Editor.SelectionLength : Editor.CaretOffset;
+            var line = doc.GetLineByOffset(Math.Min(end, doc.TextLength));
+            var insert = "\n" + text.TrimEnd('\n') + (line.NextLine is null ? "\n" : "");
+            doc.Insert(line.EndOffset, insert);
+            Editor.Select(line.EndOffset + 1, text.TrimEnd('\n').Length);
+            Editor.ScrollToLine(line.LineNumber + 1);
+        }
+
+        public void Save() => page.Save();
+    }
+
+    // ---- scrolling the editor and the preview together (Settings → Wiki → Scroll editor and preview together) ----
+
+    /// <summary>Both are shown, side by side, on a markdown page, and the setting is on.</summary>
+    private bool SyncActive => App.Services.Config.Settings.Wiki.SyncScroll && EffectiveMode == 1 && _previewReady && _path is not null && WikiService.IsMarkdown(_path);
+    /// <summary>Until then, editor scrolls are the editor following the preview, and are not sent back to it.</summary>
+    private DateTime _editorQuietUntil;
+    private bool _syncQueued, _syncSending, _syncAgain;
+
+    /// <summary>The line at the top of the editor, counted from 1, with how far into it the top is as a fraction.</summary>
+    internal double EditorTopLine()
+    {
+        var view = _editor.TextArea.TextView;
+        var doc = _editor.Document;
+        if (doc is null || doc.LineCount == 0) return 1;
+        var top = view.VerticalOffset;
+        // The height tree knows every line's top, laid out or not; find the last line that starts at or above the top.
+        int lo = 1, hi = doc.LineCount;
+        while (lo < hi)
+        {
+            var mid = (lo + hi + 1) / 2;
+            if (view.GetVisualTopByDocumentLine(mid) <= top + 0.5) lo = mid; else hi = mid - 1;
+        }
+        var y0 = view.GetVisualTopByDocumentLine(lo);
+        var y1 = lo < doc.LineCount ? view.GetVisualTopByDocumentLine(lo + 1) : view.DocumentHeight;
+        return lo + (y1 > y0 ? Math.Clamp((top - y0) / (y1 - y0), 0, 1) : 0);
+    }
+
+    /// <summary>Puts the given line (fractional, from 1) at the top of the editor.</summary>
+    internal void ScrollEditorToLine(double line)
+    {
+        var view = _editor.TextArea.TextView;
+        var doc = _editor.Document;
+        if (doc is null || doc.LineCount == 0) return;
+        var n = Math.Clamp((int)Math.Floor(line), 1, doc.LineCount);
+        var y0 = view.GetVisualTopByDocumentLine(n);
+        var y1 = n < doc.LineCount ? view.GetVisualTopByDocumentLine(n + 1) : view.DocumentHeight;
+        _editorQuietUntil = DateTime.UtcNow.AddMilliseconds(200);
+        _editor.ScrollEditorTo(y0 + (y1 - y0) * Math.Clamp(line - n, 0, 1));
+    }
+
+    /// <summary>Scrolls the preview to where the editor is, once layout has settled, one call at a time.</summary>
+    private void QueueSyncPreview()
+    {
+        if (_syncQueued || !SyncActive) return;
+        if (_syncSending) { _syncAgain = true; return; }
+        _syncQueued = true;
+        Dispatcher.UIThread.Post(async () =>
+        {
+            _syncQueued = false;
+            if (!SyncActive) return;
+            _syncSending = true;
+            try
+            {
+                var line = EditorTopLine().ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+                await _preview.InvokeScript($"(function(){{ syncEnabled = true; syncTo({line}, {_editor.Document.LineCount}); return 'ok'; }})()");
+            }
+            catch { /* the preview is reloading */ }
+            finally { _syncSending = false; }
+            if (_syncAgain) { _syncAgain = false; QueueSyncPreview(); }
+        }, DispatcherPriority.Background);
     }
 
     private async Task ScrollPreviewToAsync(double fraction)
@@ -631,17 +869,36 @@ public sealed class WikiPage : UserControl, IPage
             switch (S("t"))
             {
                 case "ready": _ = PreviewStartedAsync(); break;
-                case "open": if (S("url") is { } url && (url.StartsWith("http://") || url.StartsWith("https://") || url.StartsWith("mailto:"))) Shell.Open(url); break;
+                case "open":
+                    if (S("url") is not { } url) break;
+                    if (url.StartsWith("http://") || url.StartsWith("https://") || url.StartsWith("mailto:") || url.StartsWith("ftp://")) Shell.Open(url);
+                    else if (url.StartsWith("file:") && LocalFile(url) is { } local)
+                    {
+                        if (File.Exists(local) || Directory.Exists(local)) Shell.Open(local); else Ui.Toast(this, "File not found", local);
+                    }
+                    break;
                 case "copyText": _ = App.Services.Host.SetClipboardAsync(S("text") ?? ""); break;
                 case "scroll":
                     if (S("path") is { } p && p == _path && m["y"] is { } y) { _pendingPreviewScroll = y.GetValue<double>(); State.RememberWiki(p, preview: _pendingPreviewScroll); }
                     break;
-                case "file": _ = FileActionAsync(S("a") ?? "", S("path") ?? ""); break;
-                case "page":
-                    var target = S("path") ?? "";
-                    if (Wiki.FindPage(target) is { } page) Open(page);
-                    else _ = OfferCreateAsync(target);
+                case "sync":
+                    // The reader scrolled the preview: the editor follows.
+                    if (SyncActive && S("path") == _path && m["line"] is { } at) ScrollEditorToLine(at.GetValue<double>());
                     break;
+                case "file": _ = FileActionAsync(S("a") ?? "", S("path") ?? ""); break;
+                case "menu":
+                    // Right-click in the preview (not on a picture): plugins add their items to its menu.
+                    if (_path is not null) _ = AddPreviewMenuItemsAsync(S("sel") ?? "");
+                    break;
+                case "menuItem": _previewMenu.Pick(S("k")); break;
+                case "tag":
+                    if (S("tag") is { Length: > 0 } tag)
+                    {
+                        if (_standalone) { Ui.Main?.Navigate("wiki"); Ui.Main?.Page<WikiPage>("wiki")?.ShowTag(tag); }
+                        else ShowTag(tag);
+                    }
+                    break;
+                case "page": FollowWikiPath(S("path") ?? ""); break;
             }
         }
         catch (Exception ex) { Log.Warn("wiki", "Bad message from the preview: " + ex.Message); }
@@ -666,6 +923,90 @@ public sealed class WikiPage : UserControl, IPage
                 Ui.Toast(this, ok ? "Picture copied" : "Could not copy the picture", ok ? Path.GetFileName(full) : "The clipboard did not accept it.");
                 break;
         }
+    }
+
+    // ---- links in the editor ----
+
+    private Point? _menuPoint;
+
+    private MarkdownLink? LinkAtPoint(Point point)
+    {
+        if (_path is null || !WikiService.IsMarkdown(_path) || _editor.GetPositionFromPoint(point) is not { } pos) return null;
+        var line = _editor.Document.GetLineByNumber(pos.Line);
+        // Past the end of a line the column is one after its last character, which no link covers.
+        return MarkdownLinks.At(_editor.Document.GetText(line), pos.Column - 1);
+    }
+
+    private MarkdownLink? LinkAtOffset(int offset)
+    {
+        if (_path is null || !WikiService.IsMarkdown(_path)) return null;
+        var line = _editor.Document.GetLineByOffset(Math.Clamp(offset, 0, _editor.Document.TextLength));
+        return MarkdownLinks.At(_editor.Document.GetText(line), offset - line.Offset);
+    }
+
+    /// <summary>A wiki link's page, as a path in the wiki: [[name]] found by name, a relative link from this page's folder.</summary>
+    private string WikiTarget(MarkdownLink link)
+    {
+        if (link.IsWikiLink) return Wiki.FindPage(link.Target) ?? link.Target;
+        var target = link.Target;
+        var hash = target.IndexOf('#');
+        if (hash >= 0) target = target[..hash];
+        try { target = Uri.UnescapeDataString(target); } catch { }
+        var parts = new List<string>();
+        foreach (var part in ((target.StartsWith('/') ? "" : FolderOf(_path ?? "") + "/") + target.TrimStart('/')).Split('/'))
+        {
+            if (part is "" or ".") continue;
+            if (part == "..") { if (parts.Count > 0) parts.RemoveAt(parts.Count - 1); }
+            else parts.Add(part);
+        }
+        return string.Join('/', parts);
+    }
+
+    private static string? LocalFile(string url)
+    {
+        try { return new Uri(url).LocalPath; } catch { return null; }
+    }
+
+    private List<Control> LinkMenuItems(MarkdownLink link)
+    {
+        var items = new List<Control>();
+        var copy = link.Kind switch { LinkKind.Wiki => WikiTarget(link), _ => link.Target };
+        switch (link.Kind)
+        {
+            case LinkKind.Web: items.Add(Ui.Item("Open in Browser", () => FollowLink(link), icon: Icons.OpenInNew)); break;
+            case LinkKind.File:
+                var file = LocalFile(link.Target);
+                items.Add(Ui.Item("Open", () => FollowLink(link), file is not null && (File.Exists(file) || Directory.Exists(file)), Icons.OpenInNew));
+                items.Add(Ui.Item("Show in Folder", () => Shell.ShowInFolder(file!), file is not null && (File.Exists(file) || Directory.Exists(file)), Icons.FolderOpen));
+                break;
+            case LinkKind.Wiki: items.Add(Ui.Item("Open", () => FollowLink(link), icon: Icons.OpenInNew)); break;
+        }
+        items.Add(Ui.Item("Copy Link", () => { _ = App.Services.Host.SetClipboardAsync(copy); }, icon: Icons.ContentCopy));
+        if (link.Label.Length > 0 && link.Label != link.Target)
+            items.Add(Ui.Item("Copy Link Text", () => { _ = App.Services.Host.SetClipboardAsync(link.Label); }));
+        return items;
+    }
+
+    private void FollowLink(MarkdownLink link)
+    {
+        switch (link.Kind)
+        {
+            case LinkKind.Web:
+                if (Regex.IsMatch(link.Target, "^(https?|ftp|mailto):", RegexOptions.IgnoreCase)) Shell.Open(link.Target);
+                break;
+            case LinkKind.File:
+                if (LocalFile(link.Target) is { } file && (File.Exists(file) || Directory.Exists(file))) Shell.Open(file);
+                else Ui.Toast(this, "File not found", link.Target);
+                break;
+            case LinkKind.Wiki: FollowWikiPath(WikiTarget(link)); break;
+        }
+    }
+
+    /// <summary>Opens a page of the wiki, or offers to create it.</summary>
+    private void FollowWikiPath(string target)
+    {
+        if (Wiki.FindPage(target) is { } page) Open(page);
+        else _ = OfferCreateAsync(target);
     }
 
     private async Task OfferCreateAsync(string target)
@@ -768,9 +1109,10 @@ public sealed class WikiPage : UserControl, IPage
 
     // ---- actions ----
 
-    private async Task NewPageAsync()
+    /// <summary>A new page in <paramref name="inFolder"/> (a menu's), else the selected folder. The selection stays as it was.</summary>
+    private async Task NewPageAsync(string? inFolder = null)
     {
-        var folder = _selectedFolder ?? "";
+        var folder = inFolder ?? _selectedFolder ?? "";
         var name = await Ui.PromptAsync(Ui.Owner(this), "New page", folder.Length > 0 ? $"Page name (in {folder}/). Use / to create folders." : "Page name. Use / to create folders.");
         if (string.IsNullOrWhiteSpace(name)) return;
         Ui.Try(this, () =>
@@ -781,9 +1123,10 @@ public sealed class WikiPage : UserControl, IPage
         }, "Could not create the page");
     }
 
-    private async Task NewFolderAsync()
+    /// <summary>A new folder in <paramref name="inFolder"/> (a menu's), else the selected folder. The selection stays as it was.</summary>
+    private async Task NewFolderAsync(string? inFolder = null)
     {
-        var folder = _selectedFolder ?? "";
+        var folder = inFolder ?? _selectedFolder ?? "";
         var name = await Ui.PromptAsync(Ui.Owner(this), "New folder", folder.Length > 0 ? $"Folder name (in {folder}/)" : "Folder name");
         if (string.IsNullOrWhiteSpace(name)) return;
         Ui.Try(this, () => Wiki.CreateFolder((folder.Length > 0 ? folder + "/" : "") + name.Trim().Trim('/')), "Could not create the folder");

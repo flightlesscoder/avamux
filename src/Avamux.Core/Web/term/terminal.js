@@ -121,6 +121,8 @@
     document.body.style.background = opts.background;
     document.body.classList.toggle('crt-on', !!opts.crt);
     document.body.classList.toggle('crt-flicker', !!opts.crt && !!opts.crtFlicker);
+    document.body.classList.toggle('crt-glow', !!opts.crt && opts.crtGlow !== 'off' && opts.crtGlow !== 'colour');
+    document.body.classList.toggle('crt-glow-colour', !!opts.crt && opts.crtGlow === 'colour');
     document.documentElement.style.setProperty('--ci', String((opts.crtIntensity == null ? 50 : opts.crtIntensity) / 100));
     drawCrt();
     const r = document.documentElement.style;
@@ -145,18 +147,74 @@
     ws.onopen = () => {
       s.term.reset(); // the server replays its buffer on every connect
       s.replaying = true; // until the server's "replayed" marker has been through the parser
+      s.stat.unacked = 0;
       send(s, { t: 'r', cols: s.term.cols, rows: s.term.rows });
+      send(s, { t: 'vis', hidden: document.hidden });
     };
     ws.onmessage = (ev) => {
-      if (typeof ev.data !== 'string') { s.term.write(new Uint8Array(ev.data)); return; }
+      if (typeof ev.data !== 'string') { write(s, new Uint8Array(ev.data)); return; }
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       // Writes are parsed in order, so this callback runs once the whole history before the marker has been.
       if (m.t === 'replayed') { s.term.write('', () => { if (s.ws === ws) s.replaying = false; }); }
       else if (m.t === 'paste') { if (m.text) s.term.paste(m.text); }
-      else if (m.t === 'dump') send(s, { t: 'dump', n: m.n, text: m.screen ? screenOf(s) : textOf(s, m.lines) });
+      else if (m.t === 'dump') send(s, { t: 'dump', n: m.n, text: m.stats ? JSON.stringify(statsOf(s)) : m.screen ? screenOf(s) : textOf(s, m.lines) });
       else if (m.t === 'exit') { s.exited = true; s.term.write(`\r\n\x1b[2m[process exited with code ${m.code}]\x1b[0m\r\n`); }
     };
     ws.onclose = () => { if (!s.gone && !s.exited) setTimeout(() => connect(s), 700); };
+  }
+
+  // ---- output: flow control, and what the view is doing (avamux terminal stats) ----
+  // Parsed output is acknowledged to the server (every 32 KB, and whenever the view has caught up): it stops reading
+  // from the program while the view is too far behind, which keeps Ctrl+C and typing from waiting behind a backlog.
+  const ACK = 32 * 1024;
+  // While output pours in (more than FLOOD bytes a second: find, a build log, cat), the CRT glow is put aside: it
+  // blurs the whole text layer on every frame, which made such output three times slower to show. Screens redrawn
+  // by full-screen programs (nvim) are far smaller and keep it.
+  const FLOOD = 512 * 1024;
+  let floodBytes = 0, floodSince = 0, floodTimer = null;
+  function flooding(n) {
+    const now = performance.now();
+    if (now - floodSince > 1000) { floodSince = now; floodBytes = 0; }
+    floodBytes += n;
+    if (floodBytes < FLOOD) return;
+    document.body.classList.add('flooding');
+    clearTimeout(floodTimer);
+    floodTimer = setTimeout(() => document.body.classList.remove('flooding'), 600);
+  }
+  function write(s, data) {
+    const st = s.stat, ws = s.ws;
+    st.recv += data.length;
+    if (opts.crt) flooding(data.length);
+    s.term.write(data, () => {
+      st.parsed += data.length;
+      if (st.keyAt) st.keyOut = true;
+      if (s.ws !== ws) return; // written before a reconnect: the new connection counts afresh
+      st.unacked += data.length;
+      if (st.unacked >= ACK || st.parsed === st.recv) { send(s, { t: 'a', n: st.unacked }); st.unacked = 0; }
+    });
+  }
+
+  // For `avamux terminal stats`: bytes received and parsed (the difference is output waiting to be shown), and how
+  // long recent key presses took to show: from the key to the frame after the first output that followed it.
+  function keyed(s) {
+    const st = s.stat;
+    if (!st.keyAt) { st.keyAt = performance.now(); st.keyOut = false; }
+  }
+
+  function rendered(s) {
+    const st = s.stat;
+    if (!st.keyAt || !st.keyOut) return;
+    const t0 = st.keyAt;
+    st.keyAt = 0;
+    // The frame is painted after its animation callbacks have run; the timeout runs once it has been.
+    requestAnimationFrame(() => setTimeout(() => { st.lat.push(Math.round(performance.now() - t0)); if (st.lat.length > 200) st.lat.shift(); }, 0));
+  }
+
+  function statsOf(s) {
+    const st = s.stat;
+    const renderer = s.gl ? 'webgl' : 'dom';
+    return { received: st.recv, parsed: st.parsed, behind: st.recv - st.parsed, keyLatencyMs: st.lat.slice(), renderer, cols: s.term.cols, rows: s.term.rows,
+             visible: document.visibilityState, crt: !!opts.crt, pulse: !!opts.pulse };
   }
 
   function textOf(s, maxLines) {
@@ -214,6 +272,7 @@
     // Ctrl+Shift+L: the browser beside this tab (open one, or show / hide it).
     if (ev.ctrlKey && ev.shiftKey && k === 'l') { post({ t: 'browser' }); ev.preventDefault(); return false; }
     if (ev.ctrlKey && (ev.key === 'PageUp' || ev.key === 'PageDown')) { post({ t: ev.key === 'PageUp' ? 'prev' : 'next' }); ev.preventDefault(); return false; }
+    keyed(s);
     return true; // everything else (Ctrl+B, Ctrl+C, Alt+…) goes to the program in the terminal
   }
 
@@ -232,15 +291,16 @@
     try { term.loadAddon(new Unicode11Addon.Unicode11Addon()); term.unicode.activeVersion = '11'; } catch (e) { console.warn(e); }
     try { term.loadAddon(new WebLinksAddon.WebLinksAddon((e, uri) => send(s, { t: 'open', url: uri, mod: !!(e && (e.ctrlKey || e.metaKey)) }))); } catch (e) { console.warn(e); }
     term.open(el);
+    const s = { id, el, term, fit, ws: null, exited: false, gone: false, replaying: false, typed: false, pulse: document.createElement('div'), put: {},
+                gl: null, stat: { recv: 0, parsed: 0, unacked: 0, keyAt: 0, keyOut: false, lat: [] } };
     if (opts.renderer === 'webgl') {
-      try { const gl = new WebglAddon.WebglAddon(); gl.onContextLoss(() => gl.dispose()); term.loadAddon(gl); } catch (e) { console.warn('webgl unavailable', e); }
+      try { const gl = new WebglAddon.WebglAddon(); gl.onContextLoss(() => { gl.dispose(); s.gl = null; }); term.loadAddon(gl); s.gl = gl; } catch (e) { console.warn('webgl unavailable', e); }
     }
-    const s = { id, el, term, fit, ws: null, exited: false, gone: false, replaying: false, typed: false, pulse: document.createElement('div'), put: {} };
     // xterm raises this just before onData for keys and pastes, and not for the answers it sends to queries in the
     // output. That is how answers to queries in replayed history are told apart from the user typing meanwhile.
     try { term._core.coreService.onUserInput(() => { s.typed = true; }); } catch { }
     sessions.set(id, s);
-    term.onRender(() => pulse(s));
+    term.onRender(() => { pulse(s); rendered(s); });
     term.onScroll(() => pulse(s));
     term.textarea.addEventListener('focus', () => { pulse(s); focused(s); });
     term.textarea.addEventListener('blur', () => pulse(s));
@@ -262,6 +322,9 @@
       if (term.modes.mouseTrackingMode !== 'none' && !ev.shiftKey) return;
       ev.preventDefault();
       menuFor = s;
+      for (const x of menu.querySelectorAll('.extra')) x.remove();
+      menuAt = { x: ev.clientX, y: ev.clientY, time: Date.now() };
+      post({ t: 'menu', id: s.id, sel: s.term.getSelection() || '' });
       menu.style.display = 'block';
       menu.style.left = Math.min(ev.clientX, innerWidth - menu.offsetWidth - 4) + 'px';
       menu.style.top = Math.min(ev.clientY, innerHeight - menu.offsetHeight - 4) + 'px';
@@ -270,7 +333,35 @@
     return s;
   }
 
+  // Items the app adds to the open menu (plugins: AI Actions …): [{k, h, e, t, c: [...]} | {s: 1}].
+  let menuAt = null;
+  function addItems(container, items) {
+    for (const item of items) {
+      if (item.s) { const hr = document.createElement('hr'); hr.className = 'extra'; container.appendChild(hr); continue; }
+      const d = document.createElement('div');
+      d.className = 'extra' + (item.e === false ? ' off' : '');
+      d.textContent = item.h;
+      if (item.t) d.title = item.t;
+      if (item.c && item.c.length) {
+        d.classList.add('sub');
+        const box = document.createElement('section');
+        addItems(box, item.c);
+        d.appendChild(box);
+      } else if (item.e !== false) d.dataset.k = item.k;
+      container.appendChild(d);
+    }
+  }
+  window.addMenuItems = items => {
+    if (!menuAt || menu.style.display !== 'block' || !items || !items.length || Date.now() - menuAt.time > 2000) return;
+    const hr = document.createElement('hr'); hr.className = 'extra'; menu.appendChild(hr);
+    addItems(menu, items);
+    menu.style.left = Math.min(menuAt.x, innerWidth - menu.offsetWidth - 4) + 'px';
+    menu.style.top = Math.max(4, Math.min(menuAt.y, innerHeight - menu.offsetHeight - 4)) + 'px';
+  };
   menu.addEventListener('mousedown', ev => {
+    const k = ev.target.closest('div[data-k]');
+    if (k) { ev.preventDefault(); menu.style.display = 'none'; post({ t: 'menuItem', k: k.dataset.k }); return; }
+    if (ev.target.closest('div.sub, div.off')) { ev.preventDefault(); return; }
     const a = ev.target.closest('div[data-a]');
     const s = menuFor && !menuFor.gone ? menuFor : sessions.get(active);
     menu.style.display = 'none';
@@ -436,6 +527,7 @@
     });
   }
 
+  document.addEventListener('visibilitychange', () => { for (const s of sessions.values()) send(s, { t: 'vis', hidden: document.hidden }); });
   window.addEventListener('focus', () => { for (const s of sessions.values()) pulse(s); });
   window.addEventListener('blur', () => { for (const s of sessions.values()) pulse(s); });
   chrome();

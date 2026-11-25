@@ -109,6 +109,18 @@ public static class Ui
 
     public static T Dock<T>(this T control, Dock dock) where T : Control { DockPanel.SetDock(control, dock); return control; }
 
+    /// <summary>
+    /// Scrolls a text editor to a vertical offset. AvaloniaEdit 12's own ScrollToVerticalOffset leaves the editor
+    /// where it is, so this sets its scroll viewer's offset (once the editor has its template).
+    /// </summary>
+    public static void ScrollEditorTo(this AvaloniaEdit.TextEditor editor, double y)
+    {
+        editor.ApplyTemplate();
+        if (editor.GetVisualDescendants().OfType<ScrollViewer>().FirstOrDefault() is { } viewer)
+            viewer.Offset = new Vector(viewer.Offset.X, Math.Max(0, y));
+        else editor.ScrollToVerticalOffset(y);
+    }
+
     /// <summary>Runs on the UI thread, coalescing bursts of calls into one.</summary>
     public static Action Debounced(Action action, int ms = 60)
     {
@@ -181,6 +193,34 @@ public static class Ui
             Margin = new Thickness(18), Spacing = 14, MaxWidth = 460,
             Children = { new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { cancel, ok } } },
         };
+        await dlg.ShowDialog(owner);
+        return result;
+    }
+
+    /// <summary>A question with several answers; returns the index of the one chosen, or null when the window was closed.</summary>
+    /// <param name="body">Shown under the message (a list of what will happen), or null.</param>
+    public static async Task<int?> ChoiceAsync(Window owner, string title, string message, Control? body, params (string Label, bool Accent)[] choices)
+    {
+        int? result = null;
+        var dlg = new AppWindow
+        {
+            Title = title, SizeToContent = SizeToContent.WidthAndHeight, CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = Tk("panel"),
+        };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
+        for (var i = 0; i < choices.Length; i++)
+        {
+            var index = i;
+            var b = new Button { Content = choices[i].Label, MinWidth = 80, HorizontalContentAlignment = HorizontalAlignment.Center, IsDefault = choices[i].Accent, IsCancel = i == 0 };
+            if (choices[i].Accent) b.Classes.Add("accent");
+            b.Click += (_, _) => { result = index; dlg.Close(); };
+            buttons.Children.Add(b);
+        }
+        var panel = new StackPanel { Margin = new Thickness(18), Spacing = 14, MaxWidth = 520 };
+        panel.Children.Add(new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap });
+        if (body is not null) panel.Children.Add(body);
+        panel.Children.Add(buttons);
+        dlg.Body = panel;
         await dlg.ShowDialog(owner);
         return result;
     }

@@ -161,7 +161,7 @@ public sealed class SearchPage : UserControl, IPage
 
     private static Geometry IconFor(string source) => source switch
     {
-        "wiki" => Icons.BookOpenVariant, "events" => Icons.CalendarClock, "watches" => Icons.Eye, "terminals" => Icons.Console,
+        "wiki" => Icons.BookOpenVariant, "tags" => Icons.Tag, "events" => Icons.CalendarClock, "watches" => Icons.Eye, "terminals" => Icons.Console,
         "repositories" => Icons.SourceBranch, "logs" => Icons.TextBoxOutline, _ => Icons.Cog,
     };
 
@@ -192,6 +192,7 @@ public sealed class SearchPage : UserControl, IPage
             switch (hit.Source)
             {
                 case "wiki":
+                case "tags":
                     main.Navigate("wiki");
                     main.Page<WikiPage>("wiki")?.Open(hit.Target, hit.Line);
                     break;

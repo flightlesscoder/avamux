@@ -103,6 +103,49 @@ internal static class WebKitGtk
         g_signal_connect_data(view, "button-press-event", PressPtr, GCHandle.ToIntPtr(handle), IntPtr.Zero, 0);
     });
 
+    /// <summary>
+    /// Calls <paramref name="onKey"/> (on the GLib thread) for every key pressed or released in the view, with GDK's key
+    /// value, its name and the modifier state. The page still gets every key.
+    /// </summary>
+    public static Task WatchKeysAsync(IntPtr view, Action<uint, string, uint, bool> onKey) => OnGlib(() =>
+    {
+        if (KeyWatchers.ContainsKey(view)) return;
+        var handle = GCHandle.Alloc(onKey);
+        KeyWatchers[view] = handle;
+        g_signal_connect_data(view, "key-press-event", KeyDownPtr, GCHandle.ToIntPtr(handle), IntPtr.Zero, 0);
+        g_signal_connect_data(view, "key-release-event", KeyUpPtr, GCHandle.ToIntPtr(handle), IntPtr.Zero, 0);
+    });
+
+    public static void UnwatchKeys(IntPtr view) => _ = OnGlib(() =>
+    {
+        if (!KeyWatchers.Remove(view, out var handle)) return;
+        g_signal_handlers_disconnect_matched(view, 16 /* G_SIGNAL_MATCH_DATA */, 0, 0, IntPtr.Zero, IntPtr.Zero, GCHandle.ToIntPtr(handle));
+        handle.Free();
+    });
+
+    private static readonly PressFn KeyDownCallback = (w, e, d) => OnKey(e, d, true);
+    private static readonly PressFn KeyUpCallback = (w, e, d) => OnKey(e, d, false);
+    private static readonly IntPtr KeyDownPtr = Marshal.GetFunctionPointerForDelegate(KeyDownCallback);
+    private static readonly IntPtr KeyUpPtr = Marshal.GetFunctionPointerForDelegate(KeyUpCallback);
+    private static readonly Dictionary<IntPtr, GCHandle> KeyWatchers = new();
+
+    private static int OnKey(IntPtr gdkEvent, IntPtr data, bool down)
+    {
+        try
+        {
+            if (gdk_event_get_keyval(gdkEvent, out var keyval) == 0) return 0;
+            gdk_event_get_state(gdkEvent, out var state);
+            var name = Marshal.PtrToStringUTF8(gdk_keyval_name(keyval)) ?? "";
+            (GCHandle.FromIntPtr(data).Target as Action<uint, string, uint, bool>)?.Invoke(keyval, name, state, down);
+        }
+        catch { }
+        return 0;
+    }
+
+    [DllImport("libgdk-3.so.0")] private static extern int gdk_event_get_keyval(IntPtr gdkEvent, out uint keyval);
+    [DllImport("libgdk-3.so.0")] private static extern int gdk_event_get_state(IntPtr gdkEvent, out uint state);
+    [DllImport("libgdk-3.so.0")] private static extern IntPtr gdk_keyval_name(uint keyval);
+
     /// <summary>Stops watching a view that is going away.</summary>
     public static void UnwatchPresses(IntPtr view) => _ = OnGlib(() =>
     {

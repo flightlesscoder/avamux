@@ -689,15 +689,17 @@ public class SettingsFeatureTests
         var s = config.Settings;
         Assert.Equal("standard", s.Ui.NavStyle);
         Assert.Equal("simple", s.Theme.Name);
-        Assert.False(s.Ai.Chat);
-        Assert.False(s.Ai.Workloads);
+        Assert.True(s.Ai.Chat); // AI Chat is a real page now, shown by default
+        Assert.False(s.Ai.Tts.Enabled); // Kokoro is off until asked for
+        Assert.Equal("haiku", s.Ai.ActionsModel);
+        Assert.True(s.Ai.Workloads); // AI Workloads is a real page now too
         Assert.Equal("yyyy-MM-dd dddd", s.Wiki.DailyNoteFormat);
         Assert.Equal(500, s.Wiki.RememberedPositions);
         config.Set("ui.navStyle", ConfigService.Coerce("ui.navStyle", "mini"));
-        config.Set("ai.workloads", ConfigService.Coerce("ai.workloads", "on"));
+        config.Set("ai.workloads", ConfigService.Coerce("ai.workloads", "off"));
         config.Set("theme.name", ConfigService.Coerce("theme.name", "classic90s"));
         Assert.Equal("mini", config.Settings.Ui.NavStyle);
-        Assert.True(config.Settings.Ai.Workloads);
+        Assert.False(config.Settings.Ai.Workloads);
         Assert.Equal("90's Desktop Computer OS Classic", Themes.Resolve(config.Settings.Theme).Name);
         Assert.Contains("claude", TerminalManager.AgentNames(config.Settings.Terminal));
     }

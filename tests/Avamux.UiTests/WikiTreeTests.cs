@@ -1,3 +1,5 @@
+using Avalonia;
+using Avalonia.Headless;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Headless.XUnit;
@@ -83,5 +85,114 @@ public class WikiTreeTests
         Assert.True(note.ContextMenu!.IsOpen);
         Assert.Contains(note.ContextMenu.Items.OfType<MenuItem>(), m => m.Header as string == "Rename or Move…");
         note.ContextMenu.Close();
+    }
+
+    private static TreeViewItem Find(WikiHarness h, string path) =>
+        Tree(h).GetVisualDescendants().OfType<TreeViewItem>().First(i => (i.Tag as WikiNode)?.Path == path);
+
+    private static void RightClick(WikiHarness h, TreeViewItem item)
+    {
+        var header = item.GetVisualDescendants().OfType<TextBlock>().First();
+        var at = header.TranslatePoint(new Point(header.Bounds.Width / 2, header.Bounds.Height / 2), h.Window)!.Value;
+        h.Window.MouseMove(at);
+        h.Window.MouseDown(at, MouseButton.Right);
+        h.Window.MouseUp(at, MouseButton.Right);
+        h.Settle();
+    }
+
+    private static void Pages(WikiHarness h)
+    {
+        Directory.CreateDirectory(h.Full("Notes"));
+        File.WriteAllText(h.Full("Notes/a.md"), "# a\n");
+        File.WriteAllText(h.Full("Notes/b.md"), "# b\n");
+    }
+
+    [AvaloniaFact]
+    public void Right_clicking_a_page_that_is_not_selected_opens_its_menu()
+    {
+        using var h = new WikiHarness(Pages, open: "Notes/a.md");
+        RightClick(h, Find(h, "Notes/b.md"));
+        var item = Find(h, "Notes/b.md");
+        Assert.True(item.ContextMenu?.IsOpen);
+        Assert.Equal("Notes/a.md", h.Page.CurrentPath); // a right-click does not open the page
+        item.ContextMenu!.Close();
+    }
+
+    [AvaloniaFact]
+    public void The_menu_stays_open_while_an_edit_is_saved()
+    {
+        using var h = new WikiHarness(Pages, open: "Notes/a.md");
+        h.Editor.CaretOffset = h.Editor.Text.Length;
+        h.Type("more");
+        RightClick(h, Find(h, "Notes/b.md"));
+        var item = Find(h, "Notes/b.md");
+        var menu = item.ContextMenu!;
+        Assert.True(menu.IsOpen);
+        h.Settle(minMs: 2600); // auto-save writes the page, and the wiki changes
+        h.Wiki.NotifyChanged();
+        h.Settle(minMs: 400);
+        Assert.Contains("more", File.ReadAllText(h.Full("Notes/a.md")));
+        Assert.True(menu.IsOpen);
+        Assert.Same(item, Find(h, "Notes/b.md")); // the entry it is for was not built again
+        menu.Close();
+        h.Settle(minMs: 100);
+        File.WriteAllText(h.Full("Notes/c.md"), "# c\n");
+        h.Wiki.NotifyChanged();
+        h.Settle(minMs: 400);
+        Find(h, "Notes/c.md"); // the tree is built again once the menu is closed
+    }
+
+    [AvaloniaFact]
+    public void New_folder_from_a_page_makes_a_sibling_and_from_a_folder_a_child()
+    {
+        using var h = new WikiHarness(Pages, open: "Notes/a.md");
+        void NewFolder(string path, string header, string name, string label)
+        {
+            var item = Find(h, path);
+            item.RaiseEvent(new ContextRequestedEventArgs());
+            h.Settle();
+            var entry = item.ContextMenu!.Items.OfType<MenuItem>().First(m => m.Header as string == header);
+            entry.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+            item.ContextMenu.Close();
+            h.Settle();
+            var dialog = h.Window.OwnedWindows.Single();
+            Assert.Contains(dialog.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == label);
+            dialog.GetVisualDescendants().OfType<TextBox>().Single().Text = name;
+            dialog.GetVisualDescendants().OfType<Button>().First(b => b.Content as string == "OK").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            h.Settle(minMs: 300);
+        }
+        NewFolder("Notes/b.md", "New Folder…", "Beside", "Folder name (in Notes/)");
+        Assert.True(Directory.Exists(h.Full("Notes/Beside")));
+        NewFolder("Notes", "New Folder Here…", "Inside", "Folder name (in Notes/)");
+        Assert.True(Directory.Exists(h.Full("Notes/Inside")));
+    }
+
+    [AvaloniaFact]
+    public void A_new_folder_from_a_menu_leaves_the_selected_folder_as_it_was()
+    {
+        using var h = new WikiHarness(x => { Pages(x); Directory.CreateDirectory(x.Full("Other")); File.WriteAllText(x.Full("Other/c.md"), "# c\n"); }, open: "Notes/a.md");
+        Window Prompt(string label)
+        {
+            var dialog = h.Window.OwnedWindows.Single();
+            Assert.Contains(dialog.GetVisualDescendants().OfType<TextBlock>(), t => t.Text == label);
+            return dialog;
+        }
+        // From the menu of a page in another folder, a new folder is begun there, and then cancelled.
+        var item = Find(h, "Other/c.md");
+        item.RaiseEvent(new ContextRequestedEventArgs());
+        h.Settle();
+        item.ContextMenu!.Items.OfType<MenuItem>().First(m => m.Header as string == "New Folder…").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(MenuItem.ClickEvent));
+        item.ContextMenu.Close();
+        h.Settle();
+        Prompt("Folder name (in Other/)").Close();
+        h.Settle(minMs: 200);
+        // The toolbar still makes pages and folders in the folder of the page that is open.
+        foreach (var (tip, label) in new[] { ("New page in the selected folder", "Page name (in Notes/). Use / to create folders."), ("New folder", "Folder name (in Notes/)") })
+        {
+            h.Page.GetVisualDescendants().OfType<Button>().First(b => ToolTip.GetTip(b) as string == tip).RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            h.Settle();
+            Prompt(label).Close();
+            h.Settle(minMs: 200);
+        }
     }
 }

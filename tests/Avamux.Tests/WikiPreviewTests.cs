@@ -6,6 +6,22 @@ namespace Avamux.Tests;
 public class WikiPreviewTests
 {
     [Fact]
+    public void Blocks_carry_the_editor_line_they_start_on()
+    {
+        var page = "---\ntitle: Notes\n---\n# Heading\n\nA paragraph with #tag and [[Other]].\n\n- one\n- two\n\n```csharp\nvar x = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
+        var html = WikiService.Render(page, sourceLines: true);
+        Assert.Contains("<table class=\"frontmatter\" data-line=\"1\"", html);
+        Assert.Contains("<h1 id=\"heading\" data-line=\"4\">", html);
+        Assert.Contains("<p data-line=\"6\">", html);
+        Assert.Contains("<ul data-line=\"8\">", html);
+        Assert.Contains("<pre data-line=\"11\"", html);
+        Assert.Contains("data-line=\"15\"", html); // the table
+        // Without asking, the HTML is as before.
+        Assert.DoesNotContain("data-line", WikiService.Render(page));
+        Assert.Equal(WikiService.Render(page).Replace("\r", ""), System.Text.RegularExpressions.Regex.Replace(html, " data-line=\"\\d+\"", "").Replace("\r", ""));
+    }
+
+    [Fact]
     public void Big_media_waits_for_a_click_and_small_media_does_not_preload()
     {
         using var box = new Sandbox();

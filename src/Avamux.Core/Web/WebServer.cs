@@ -99,6 +99,7 @@ public sealed class WebServer : IAsyncDisposable
             ["pulse"] = t.CursorPulse, ["pulseShape"] = t.CursorPulseShape is "outline" or "bar" ? t.CursorPulseShape : "block",
             ["pulseColor"] = Theming.Rgb.TryParse(t.CursorPulseColor, out var pulse) ? pulse.Hex : theme["accent"],
             ["crt"] = t.Crt, ["crtIntensity"] = Math.Clamp(t.CrtIntensity, 0, 100), ["crtFlicker"] = t.CrtFlicker,
+            ["crtGlow"] = t.CrtGlow is "colour" or "color" ? "colour" : t.CrtGlow == "off" ? "off" : "fast",
             ["pulseDouble"] = t.CursorPulseDouble, ["pulseRate"] = Math.Clamp(t.CursorPulseRate, 20, 240), ["pulseGlow"] = Math.Clamp(t.CursorPulseGlow, 0, 100),
             ["background"] = Theming.Rgb.TryParse(t.Background, out var bg) ? bg.Hex : theme["termBg"],
             ["foreground"] = Theming.Rgb.TryParse(t.Foreground, out var fg) ? fg.Hex : theme["termFg"],
@@ -166,10 +167,13 @@ public sealed class WebServer : IAsyncDisposable
 
     // ---- terminal sockets ----
 
+    /// <summary>One view of a terminal: its socket, and the flow control that keeps the program at the view's pace.</summary>
     private sealed class TermSocket(WebSocket ws)
     {
         private readonly SemaphoreSlim _gate = new(1, 1);
         public WebSocket Socket => ws;
+        public ViewFlow Flow { get; } = new();
+
         public async Task SendAsync(ReadOnlyMemory<byte> data, WebSocketMessageType type)
         {
             await _gate.WaitAsync();
@@ -193,7 +197,13 @@ public sealed class WebServer : IAsyncDisposable
 
         // Output is queued so the pty read thread never blocks on a slow socket and ordering is preserved.
         var queue = System.Threading.Channels.Channel.CreateUnbounded<byte[]>();
-        var (replay, subscription) = session.Attach(chunk => queue.Writer.TryWrite(chunk));
+        var (replay, subscription) = session.Attach(chunk =>
+        {
+            if (!queue.Writer.TryWrite(chunk)) return;
+            sock.Flow.Queued(chunk.Length);
+            sock.Flow.WaitForView();
+        });
+        sock.Flow.Queued(replay.Length);
         void OnExit(TerminalSession s, int code) => _ = sock.SendJsonAsync(new JsonObject { ["t"] = "exit", ["code"] = code });
         session.Exited += OnExit;
         var pump = Task.Run(async () =>
@@ -227,6 +237,7 @@ public sealed class WebServer : IAsyncDisposable
         catch (WebSocketException) { }
         finally
         {
+            sock.Flow.Close();
             subscription.Dispose();
             session.Exited -= OnExit;
             queue.Writer.TryComplete();
@@ -241,6 +252,8 @@ public sealed class WebServer : IAsyncDisposable
         switch (m["t"]?.GetValue<string>())
         {
             case "i": session.Write(m["d"]!.GetValue<string>()); break;
+            case "a": sock.Flow.Acked(m["n"]!.GetValue<long>()); break;
+            case "vis": sock.Flow.SetHidden(m["hidden"]?.GetValue<bool>() == true); break;
             case "b": session.Write(Convert.FromBase64String(m["d"]!.GetValue<string>())); break;
             case "r": session.Resize(m["cols"]!.GetValue<int>(), m["rows"]!.GetValue<int>()); break;
             case "title":
@@ -263,7 +276,24 @@ public sealed class WebServer : IAsyncDisposable
     }
 
     /// <summary>Asks a connected terminal view for its rendered text. Null when no view is attached.</summary>
-    public async Task<string?> RequestTextAsync(string id, int? lines, bool screenOnly)
+    public Task<string?> RequestTextAsync(string id, int? lines, bool screenOnly)
+    {
+        var msg = new JsonObject { ["screen"] = screenOnly };
+        if (lines is int l) msg["lines"] = l;
+        return AskViewAsync(id, msg);
+    }
+
+    /// <summary>
+    /// What a connected terminal view is doing: output received and parsed (and so how far behind it is), how long
+    /// recent key presses took to show, and its renderer. Null when no view is attached.
+    /// </summary>
+    public async Task<JsonObject?> ViewStatsAsync(string id)
+    {
+        if (await AskViewAsync(id, new JsonObject { ["stats"] = true }) is not { } text || JsonNode.Parse(text) is not JsonObject o) return null;
+        return o;
+    }
+
+    private async Task<string?> AskViewAsync(string id, JsonObject msg)
     {
         if (!_sockets.TryGetValue(id, out var set)) return null;
         var sock = set.Keys.FirstOrDefault(s => s.Socket.State == WebSocketState.Open);
@@ -271,8 +301,8 @@ public sealed class WebServer : IAsyncDisposable
         var n = Interlocked.Increment(ref _dumpId);
         var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _dumps[n] = tcs;
-        var msg = new JsonObject { ["t"] = "dump", ["n"] = n, ["screen"] = screenOnly };
-        if (lines is int l) msg["lines"] = l;
+        msg["t"] = "dump";
+        msg["n"] = n;
         await sock.SendJsonAsync(msg);
         try { return await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
         catch (TimeoutException) { _dumps.TryRemove(n, out _); return null; }
