@@ -33,7 +33,8 @@ public sealed partial class ChatMessageView : UserControl
 {
     private readonly ChatRow _row;
     private readonly ChatPage _page;
-    private bool _editing;
+    /// <summary>The message whose editor is shown now (null: the message itself is shown).</summary>
+    private string? _editorShown;
     private DispatcherTimer? _dots;
     private DateTime _lastBuild;
     private bool _buildPending;
@@ -64,9 +65,16 @@ public sealed partial class ChatMessageView : UserControl
 
     private void Build(bool force = false)
     {
-        if (_editing) return;
         var m = _row.Message;
-        var sig = Signature(m) + "|" + App.Services.Speech.SpeakingTag + "|" + (m.IsWriting ? Chats.Requests(_row.ChatId).Count : 0);
+        // Being edited: the editor stays (its state is the page's, so a view made again, scrolled away and back say, shows it too).
+        if (_page.Editing.TryGetValue(m.Id, out var edit))
+        {
+            if (_editorShown != m.Id) ShowEditor(m, edit);
+            return;
+        }
+        _editorShown = null;
+        var sig = Signature(m) + "|" + App.Services.Speech.SpeakingTag + "|" + (m.IsWriting ? Chats.Requests(_row.ChatId).Count : 0)
+                  + "|" + (m.Role == "assistant" && Chats.CanEditReplies(_row.ChatId)); // the chat's provider changed
         if (!force && sig == _row.Shown && Content is not null) return;
         _row.Shown = sig;
         _lastBuild = DateTime.Now;
@@ -104,24 +112,38 @@ public sealed partial class ChatMessageView : UserControl
         var column = new StackPanel { Spacing = 2, HorizontalAlignment = HorizontalAlignment.Right, Children = { bubble } };
         var footer = Ui.Row(4);
         footer.HorizontalAlignment = HorizontalAlignment.Right;
-        if (Versions(m) is { } switcher) footer.Children.Add(switcher);
+        if (Chats.Find(_row.ChatId) is { } chat && ChatService.Versions(chat, m) is { Count: > 1 } versions && versions.Any(v => v.Text != m.Text))
+            footer.Children.Add(Switcher(versions, m));
         footer.Children.Add(actions);
         column.Children.Add(footer);
         return column;
     }
 
-    /// <summary>‹ 2/3 › between the versions of a message, when there is more than one.</summary>
-    private Control? Versions(AiChatMessage m)
+    /// <summary>
+    /// The versions a reply can be switched between: its own, or (written again, or the question edited) those of the
+    /// message it answers, each with its own reply. Null when there is only one.
+    /// </summary>
+    private (List<AiChatMessage> Versions, AiChatMessage Current)? ReplyVersions(AiChatMessage reply)
     {
-        var chat = Chats.Find(_row.ChatId);
-        if (chat is null) return null;
-        var versions = ChatService.Versions(chat, m);
-        if (versions.Count < 2) return null;
+        if (Chats.Find(_row.ChatId) is not { } chat) return null;
+        var own = ChatService.Versions(chat, reply);
+        if (own.Count > 1) return (own, reply);
+        AiChatMessage? asked;
+        lock (chat) asked = chat.Messages.FirstOrDefault(x => x.Id == reply.ParentId);
+        if (asked is null) return null;
+        var theirs = ChatService.Versions(chat, asked);
+        return theirs.Count > 1 ? (theirs, asked) : null;
+    }
+
+    /// <summary>‹ 2/3 › between the versions of a message.</summary>
+    private Control Switcher(List<AiChatMessage> versions, AiChatMessage m)
+    {
         var i = versions.FindIndex(v => v.Id == m.Id);
         var prev = Ui.IconButton(Icons.ChevronLeft, "Earlier version", () => Chats.SelectVersion(_row.ChatId, versions[i - 1].Id));
         var next = Ui.IconButton(Icons.ChevronRight, "Later version", () => Chats.SelectVersion(_row.ChatId, versions[i + 1].Id));
         prev.IsEnabled = i > 0;
         next.IsEnabled = i < versions.Count - 1;
+        foreach (var b in new[] { prev, next }) { b.Padding = new Thickness(5, 3); b.Opacity = 0.7; }
         return Ui.Row(0, prev, new TextBlock { Text = $"{i + 1}/{versions.Count}", Foreground = Ui.Dim, FontSize = 11.5, VerticalAlignment = VerticalAlignment.Center }, next);
     }
 
@@ -133,7 +155,7 @@ public sealed partial class ChatMessageView : UserControl
         var waiting = m.IsWriting && m.Text.Length == 0;
         if (!string.IsNullOrEmpty(m.Thinking) || m.IsThinking || waiting && m.Tools.Count == 0)
             column.Children.Add(Thinking(m, live: m.IsWriting && m.Text.Length == 0 && (m.IsThinking || m.Tools.Count == 0)));
-        foreach (var tool in m.Tools) column.Children.Add(Tool(tool));
+        foreach (var tool in m.Tools) column.Children.Add(Tool(m, tool));
         if (m.Text.Length > 0)
         {
             column.Children.Add(MarkdownView.Build(m.Text, 13.5, new MarkdownOptions
@@ -161,13 +183,29 @@ public sealed partial class ChatMessageView : UserControl
         if (!m.IsWriting)
         {
             var speaking = App.Services.Speech.SpeakingTag == m.Id;
-            var actions = Actions(
-                (Icons.ContentCopy, "Copy (markdown)", () => Copy(m.Text)),
-                (Icons.TextBoxOutline, "Copy as plain text", () => Copy(SpeechService.Speakable(m.Text).Trim())),
-                (Icons.Pencil, "Edit this reply (only the saved text changes)", () => BeginEdit(m, resend: false)),
-                (speaking ? Icons.Stop : Icons.VolumeHigh, speaking ? "Stop speaking" : "Speak (Kokoro)", () => _ = SpeechUi.ToggleAsync(this, m.Text, m.Id)),
-                (Icons.Refresh, "Write this reply again (the old one stays as an earlier version)", () => _ = _page.RunAsync(() => Chats.RetryAsync(_row.ChatId, m.Id))),
-                (Icons.BookOpenVariant, "Insert into a wiki page…", () => _ = InsertIntoWikiAsync(m.Text)));
+            var edit = ActionButton(Icons.Pencil, "Edit this reply (only the saved text changes)", () => BeginEdit(m, resend: false));
+            var retry = ActionButton(Icons.Refresh, "Write this reply again (the old one stays as an earlier version)", () =>
+            {
+                App.Services.Speech.Stop(); // what was being read out is being replaced
+                _ = _page.RunAsync(() => Chats.RetryAsync(_row.ChatId, m.Id));
+            });
+            var actions = Ui.Row(0,
+                ActionButton(Icons.ContentCopy, "Copy (markdown)", () => Copy(m.Text)),
+                ActionButton(Icons.TextBoxOutline, "Copy as plain text", () => Copy(SpeechService.Speakable(m.Text).Trim())),
+                edit,
+                ActionButton(speaking ? Icons.Stop : Icons.VolumeHigh, speaking ? "Stop speaking" : "Speak (Kokoro)", () => _ = SpeechUi.ToggleAsync(this, m.Text, m.Id)),
+                retry,
+                ActionButton(Icons.BookOpenVariant, "Insert into a wiki page…", () => _ = InsertIntoWikiAsync(m.Text)));
+            if (!Chats.CanEditReplies(_row.ChatId))
+            {
+                // pi and Claude Code keep their own copy of the conversation: an edited reply would never reach them.
+                edit.IsEnabled = false;
+                ToolTip.SetShowOnDisabled(edit, true);
+                ToolTip.SetTip(edit, "Replies can't be edited with this provider: it keeps its own copy of the conversation, so the edit would not reach it. "
+                                     + "Edit your message above instead: that sends a new version.");
+            }
+            // ‹ 1/2 › beside "Write this reply again", which makes the versions.
+            if (ReplyVersions(m) is var (versions, current)) actions.Children.Insert(actions.Children.IndexOf(retry) + 1, Switcher(versions, current));
             var footer = Ui.Row(6, actions);
             if (m.Edited) footer.Children.Add(new TextBlock { Text = "edited", Foreground = Ui.Tk("faint"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
             if (m.Model is { Length: > 0 } model) footer.Children.Add(new TextBlock { Text = model, Foreground = Ui.Tk("faint"), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
@@ -200,14 +238,22 @@ public sealed partial class ChatMessageView : UserControl
         }
         var header = Ui.Row(6, new PathIcon { Data = Icons.Sparkles, Width = 12, Height = 12, Foreground = Ui.Tk("purple") }, label);
         if (string.IsNullOrEmpty(m.Thinking)) return header;
-        return new Expander
-        {
-            Header = header, IsExpanded = App.Services.Config.Settings.Ai.ExpandThinking, Padding = new Thickness(10, 4),
-            Content = new SelectableTextBlock { Text = m.Thinking, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Dim, FontSize = 12.5, FontStyle = FontStyle.Italic },
-        };
+        return Fold(m.Id + "|thinking", App.Services.Config.Settings.Ai.ExpandThinking, header,
+            new SelectableTextBlock { Text = m.Thinking, TextWrapping = TextWrapping.Wrap, Foreground = Ui.Dim, FontSize = 12.5, FontStyle = FontStyle.Italic });
     }
 
-    private static Control Tool(AiChatTool t)
+    /// <summary>
+    /// A part that opens and closes, and stays as it was left: the message is built again as it is written (and when it
+    /// scrolls back into view), so whether it is open is kept by the page.
+    /// </summary>
+    private Expander Fold(string key, bool open, object header, Control content)
+    {
+        var e = new Expander { Header = header, IsExpanded = _page.Expanded.TryGetValue(key, out var was) ? was : open, Padding = new Thickness(10, 4), Content = content };
+        e.PropertyChanged += (_, a) => { if (a.Property == Expander.IsExpandedProperty) _page.Expanded[key] = e.IsExpanded; };
+        return e;
+    }
+
+    private Control Tool(AiChatMessage m, AiChatTool t)
     {
         var icon = new PathIcon
         {
@@ -219,7 +265,7 @@ public sealed partial class ChatMessageView : UserControl
         if (t.Input is { Length: > 2 } input) details.Children.Add(Mono(input));
         if (t.Output is { Length: > 0 } output) details.Children.Add(Mono(output.Length > 4000 ? output[..4000] + "\n…" : output, t.IsError));
         if (details.Children.Count == 0) return header;
-        return new Expander { Header = header, Padding = new Thickness(10, 4), Content = details };
+        return Fold($"{m.Id}|tool|{(t.Id.Length > 0 ? t.Id : m.Tools.IndexOf(t).ToString())}", false, header, details);
     }
 
     private static Control Mono(string text, bool error = false) => new Border
@@ -228,33 +274,51 @@ public sealed partial class ChatMessageView : UserControl
         Child = new SelectableTextBlock { Text = text, FontFamily = Ui.Mono, FontSize = 11.5, TextWrapping = TextWrapping.Wrap, Foreground = error ? Ui.Tk("error") : Ui.Tk("textCode") },
     };
 
-    private static StackPanel Actions(params (Geometry Icon, string Tip, Action Click)[] actions)
+    private static StackPanel Actions(params (Geometry Icon, string Tip, Action Click)[] actions) =>
+        Ui.Row(0, actions.Select(a => (Control)ActionButton(a.Icon, a.Tip, a.Click)).ToArray());
+
+    /// <summary>One of the small buttons under a message.</summary>
+    private static Button ActionButton(Geometry icon, string tip, Action click)
     {
-        var row = Ui.Row(0);
-        foreach (var (icon, tip, click) in actions)
-        {
-            var b = Ui.IconButton(icon, tip, click);
-            b.Padding = new Thickness(5, 3);
-            b.Opacity = 0.7;
-            row.Children.Add(b);
-        }
-        return row;
+        var b = Ui.IconButton(icon, tip, click);
+        b.Padding = new Thickness(5, 3);
+        b.Opacity = 0.7;
+        return b;
     }
 
     private void Copy(string text) => _ = App.Services.Host.SetClipboardAsync(text);
 
     // ---- editing ----
 
+    /// <summary>A message being edited: whether it is sent again, and the text so far.</summary>
+    internal sealed class EditState(bool resend, string text)
+    {
+        public bool Resend { get; } = resend;
+        public string Text { get; set; } = text;
+    }
+
     private void BeginEdit(AiChatMessage m, bool resend)
     {
-        _editing = true;
-        var box = new TextBox { Text = m.Text, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 60, MaxHeight = 420, FontSize = 13.5 };
-        void Done() { _editing = false; Build(force: true); }
+        _page.Editing[m.Id] = new EditState(resend, m.Text);
+        Build(force: true);
+    }
+
+    private void ShowEditor(AiChatMessage m, EditState edit)
+    {
+        _editorShown = m.Id;
+        var resend = edit.Resend;
+        var box = new TextBox { Text = edit.Text, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MinHeight = 60, MaxHeight = 420, FontSize = 13.5 };
+        box.TextChanged += (_, _) => edit.Text = box.Text ?? "";
+        void Done() { _page.Editing.Remove(m.Id); Build(force: true); }
         var save = Ui.TextButton(resend ? "Send" : "Save", () =>
         {
             var text = box.Text ?? "";
             Done();
-            if (resend) _ = _page.RunAsync(() => Chats.EditAndResendAsync(_row.ChatId, m.Id, text));
+            if (resend)
+            {
+                App.Services.Speech.Stop(); // the reply below is being replaced
+                _ = _page.RunAsync(() => Chats.EditAndResendAsync(_row.ChatId, m.Id, text));
+            }
             else Ui.Try(this, () => Chats.EditReply(_row.ChatId, m.Id, text));
         }, resend ? "Send this as a new version of the message" : "Keep this text as the reply (nothing is sent)");
         save.Classes.Add("accent");

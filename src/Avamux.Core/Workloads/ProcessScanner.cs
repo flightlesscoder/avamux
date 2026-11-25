@@ -255,18 +255,42 @@ public static class ProcessScanner
     }
 
     /// <summary>Asks a process to end (SIGTERM), waits, and kills it (SIGKILL) if it is still there. True when it is gone.</summary>
-    public static async Task<bool> StopAsync(int pid, TimeSpan grace, CancellationToken ct = default)
+    public static async Task<bool> StopAsync(int pid, TimeSpan grace, CancellationToken ct = default) => await WhyNotStoppedAsync(pid, grace, ct) is null;
+
+    /// <summary>
+    /// Asks a process to end (SIGTERM), waits up to <paramref name="grace"/>, then kills it (SIGKILL). Null when it is
+    /// gone; otherwise why it is not, in words to show (not allowed to signal it, or it outlived SIGKILL).
+    /// </summary>
+    public static async Task<string?> WhyNotStoppedAsync(int pid, TimeSpan grace, CancellationToken ct = default)
     {
-        if (!Alive(pid)) return true;
-        Signal(pid, SIGTERM);
+        if (!Alive(pid)) return null;
+        if (SysKill(pid, SIGTERM) != 0 && Denied() is { } denied) return denied;
         var until = DateTime.UtcNow + grace;
         while (DateTime.UtcNow < until)
         {
-            if (!Alive(pid)) return true;
+            if (!Alive(pid)) return null;
             await Task.Delay(250, ct);
         }
-        Signal(pid, SIGKILL);
-        for (var i = 0; i < 20 && Alive(pid); i++) await Task.Delay(100, ct);
-        return !Alive(pid);
+        if (SysKill(pid, SIGKILL) != 0 && Denied() is { } denied2) return denied2;
+        for (var i = 0; i < 30 && Alive(pid); i++) await Task.Delay(100, ct);
+        if (!Alive(pid)) return null;
+        // SIGKILL cannot be caught: a process that survives it is stuck in the kernel (a driver call, a hung disk).
+        var state = OperatingSystem.IsLinux() && Read($"/proc/{pid}/stat") is { } stat && stat.LastIndexOf(')') is var close and > 0 && close + 2 < stat.Length ? stat[close + 2] : '?';
+        return state == 'D'
+            ? $"it is still there after SIGTERM and SIGKILL: it is stuck in the kernel (state D, waiting on a driver or disk) and ends when that call returns"
+            : $"it is still there after SIGTERM, {grace.TotalSeconds:0} seconds, and SIGKILL";
     }
+
+    private static string? Denied()
+    {
+        var errno = Marshal.GetLastWin32Error();
+        return errno switch
+        {
+            1 => "avamux is not allowed to signal it (it belongs to another user, or runs in a sandbox avamux cannot reach)",
+            3 => null, // ESRCH: it ended in the meantime
+            _ => $"signalling it failed (errno {errno})",
+        };
+    }
+
+    private static string? Read(string path) { try { return File.ReadAllText(path); } catch { return null; } }
 }

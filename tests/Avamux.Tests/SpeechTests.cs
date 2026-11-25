@@ -46,6 +46,60 @@ public class SpeechTests
     private static bool Alive(int pid) { try { return !System.Diagnostics.Process.GetProcessById(pid).HasExited; } catch { return false; } }
 
     [Fact]
+    public async Task Stopping_ends_the_sentence_playing_without_saying_it_again()
+    {
+        var (box, app) = Make();
+        using var _ = box;
+        await using var __ = app;
+        // A player that takes its time (killed by Stop) and a second one: tried only when the first fails, never after a stop.
+        var played = Path.Combine(box.Root, "played.log");
+        var slow = Path.Combine(box.Root, "slow-player");
+        var other = Path.Combine(box.Root, "other-player");
+        File.WriteAllText(slow, $"#!/bin/sh\necho \"slow $1\" >> '{played}'\nexec sleep 30\n");
+        File.WriteAllText(other, $"#!/bin/sh\necho \"other $1\" >> '{played}'\n");
+        foreach (var f in new[] { slow, other }) File.SetUnixFileMode(f, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Environment.SetEnvironmentVariable("AVAMUX_SPEECH_PLAYER", slow + Path.PathSeparator + other);
+        try
+        {
+            Assert.Null(await app.Speech.SpeakAsync("The first sentence. The second sentence.", "m1"));
+            await WaitFor(() => File.Exists(played) && File.ReadAllText(played).Contains("slow"));
+            Assert.Equal(SpeechState.Speaking, app.Speech.State);
+            app.Speech.Stop();
+            Assert.NotEqual(SpeechState.Speaking, app.Speech.State);
+            await Task.Delay(800);
+            var lines = File.ReadAllLines(played);
+            Assert.Single(lines); // the first sentence, cut off: not again with the other player, and not the second
+            Assert.StartsWith("slow ", lines[0]);
+        }
+        finally { Environment.SetEnvironmentVariable("AVAMUX_SPEECH_PLAYER", "true"); }
+    }
+
+    [Fact]
+    public async Task A_stop_just_after_a_sentence_is_taken_to_play_keeps_it_from_playing()
+    {
+        var (box, app) = Make();
+        using var _ = box;
+        await using var __ = app;
+        var played = Path.Combine(box.Root, "played.log");
+        var player = Path.Combine(box.Root, "player");
+        File.WriteAllText(player, $"#!/bin/sh\necho \"$1\" >> '{played}'\n");
+        File.SetUnixFileMode(player, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Environment.SetEnvironmentVariable("AVAMUX_SPEECH_PLAYER", player);
+        var stopped = 0;
+        // Stop() lands in the gap between the loop taking the sentence from the queue and starting its player.
+        app.Speech.BeforePlay = () => { if (Interlocked.Exchange(ref stopped, 1) == 0) app.Speech.Stop(); };
+        try
+        {
+            Assert.Null(await app.Speech.SpeakAsync("Only this sentence.", "m1"));
+            await WaitFor(() => stopped == 1);
+            await WaitFor(() => app.Speech.State == SpeechState.Ready);
+            await Task.Delay(500);
+            Assert.False(File.Exists(played), "the sentence played after Stop(): " + (File.Exists(played) ? File.ReadAllText(played) : ""));
+        }
+        finally { Environment.SetEnvironmentVariable("AVAMUX_SPEECH_PLAYER", "true"); }
+    }
+
+    [Fact]
     public async Task It_is_off_by_default_and_starts_nothing()
     {
         using var box = new Sandbox();

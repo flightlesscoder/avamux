@@ -49,6 +49,8 @@ public sealed partial class SpeechService : IAsyncDisposable
     public event Action? Changed;
     /// <summary>Raised after each sentence's file was played (tests).</summary>
     public event Action<string>? Played;
+    /// <summary>Runs between the play loop taking a file and playing it (tests put a Stop() there).</summary>
+    internal Action? BeforePlay;
     public IReadOnlyList<string> Voices { get { lock (_gate) return [.. _voices]; } }
     public string? LastError { get; private set; }
 
@@ -162,8 +164,8 @@ public sealed partial class SpeechService : IAsyncDisposable
         if (State != SpeechState.Off) SetState(SpeechState.Off);
     }
 
-    /// <summary>AVAMUX_SPEECH_PLAYER replaces the player (tests set it to a program that plays nothing).</summary>
-    private static string[] Players => Environment.GetEnvironmentVariable("AVAMUX_SPEECH_PLAYER") is { Length: > 0 } custom ? [custom]
+    /// <summary>AVAMUX_SPEECH_PLAYER replaces the players, tried in turn (tests set it to programs that play nothing; separate several with the path separator).</summary>
+    private static string[] Players => Environment.GetEnvironmentVariable("AVAMUX_SPEECH_PLAYER") is { Length: > 0 } custom ? custom.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
         : OperatingSystem.IsMacOS() ? ["afplay"] : ["pw-play", "paplay", "aplay"];
 
     private async Task PlayLoopAsync()
@@ -171,6 +173,7 @@ public sealed partial class SpeechService : IAsyncDisposable
         while (true)
         {
             (long Id, string Wav) next;
+            long generation;
             lock (_gate)
             {
                 if (_ready.Count == 0)
@@ -181,14 +184,19 @@ public sealed partial class SpeechService : IAsyncDisposable
                     return;
                 }
                 next = _ready.Dequeue();
+                // Read with the file, under the lock Stop() moves the generation in: a Stop() after this is seen as one.
+                generation = Interlocked.Read(ref _generation);
             }
-            await PlayAsync(next.Wav);
+            BeforePlay?.Invoke();
+            await PlayAsync(next.Wav, generation);
             TryDelete(next.Wav);
         }
     }
 
-    private async Task PlayAsync(string wav)
+    /// <summary>Plays a file with the first player that works. Stopped meanwhile (<paramref name="generation"/> moved on): no other player is tried.</summary>
+    private async Task PlayAsync(string wav, long generation)
     {
+        bool Stopped() => Interlocked.Read(ref _generation) != generation;
         var volume = Math.Clamp(Settings.Volume, 0, 1);
         var v = volume.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
         foreach (var exe in Players)
@@ -198,15 +206,19 @@ public sealed partial class SpeechService : IAsyncDisposable
             {
                 var psi = new ProcessStartInfo(exe) { UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
                 foreach (var a in args) psi.ArgumentList.Add(a);
+                if (Stopped()) return;
                 var p = Process.Start(psi);
                 if (p is null) continue;
                 lock (_gate) _player = p;
+                // Stop() kills the player it finds; one started just as it ran is stopped here.
+                if (Stopped()) try { p.Kill(); } catch { }
                 await p.WaitForExitAsync();
                 lock (_gate) _player = null;
                 Played?.Invoke(wav);
                 var ok = p.ExitCode == 0;
                 p.Dispose();
-                if (ok) return;
+                // A player that was killed by Stop() did not fail: trying the next one would say the sentence again.
+                if (ok || Stopped()) return;
             }
             catch (System.ComponentModel.Win32Exception) { /* not installed: try the next */ }
         }
@@ -253,10 +265,12 @@ public sealed partial class SpeechService : IAsyncDisposable
     /// <summary>Stops speaking: what is playing, and what was waiting to be.</summary>
     public void Stop()
     {
-        Interlocked.Increment(ref _generation);
         List<string> files;
         lock (_gate)
         {
+            // Moved under the lock the play loop takes a file in, so the loop either takes a file before this (and
+            // sees the new generation, so it does not play it) or after (and finds the queue empty).
+            Interlocked.Increment(ref _generation);
             _expected.Clear();
             files = _ready.Select(r => r.Wav).ToList();
             _ready.Clear();

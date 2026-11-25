@@ -7,8 +7,10 @@ Takes --port, --alias, --ctx-size and --model like the real one, and answers /he
   FAKE_LLAMA_FAIL          print this line and exit 1 after loading starts (e.g. "CUDA error: out of memory")
   FAKE_LLAMA_BUSY          a file: while it exists, /slots says a request is being worked on
   FAKE_LLAMA_COMMIT        the commit --version reports (default abc1234)
+  FAKE_LLAMA_STOP_SECONDS  how long it keeps answering after SIGTERM, as a server finishing its work does (default 0)
+  FAKE_LLAMA_NEXT_TOKEN    "object": /slots gives next_token as an object, as some builds do (default: an array)
 """
-import json, os, signal, sys, time
+import json, os, signal, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 args = sys.argv[1:]
@@ -64,10 +66,20 @@ class Handler(BaseHTTPRequestHandler):
             busy = bool(os.environ.get("FAKE_LLAMA_BUSY")) and os.path.exists(os.environ["FAKE_LLAMA_BUSY"])
             if busy:
                 tasks += 1
-            return self.send(200, [{"id": 0, "id_task": tasks, "is_processing": busy, "next_token": [{"n_decoded": 42 if busy else 0}]}])
+            next_token = {"n_decoded": 42 if busy else 0}
+            if os.environ.get("FAKE_LLAMA_NEXT_TOKEN") != "object":
+                next_token = [next_token]
+            return self.send(200, [{"id": 0, "id_task": tasks, "is_processing": busy, "next_token": next_token}])
         if self.path == "/v1/models":
             return self.send(200, {"object": "list", "data": [{"id": alias}]})
         self.send(404, {"error": "not found"})
 
-signal.signal(signal.SIGTERM, lambda *a: (print("received SIGTERM, shutting down", flush=True), os._exit(0)))
+def on_term(*a):
+    print("received SIGTERM, shutting down", flush=True)
+    linger = float(os.environ.get("FAKE_LLAMA_STOP_SECONDS", "0"))
+    if linger <= 0:
+        os._exit(0)
+    threading.Timer(linger, lambda: os._exit(0)).start()
+
+signal.signal(signal.SIGTERM, on_term)
 ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()

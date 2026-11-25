@@ -56,6 +56,40 @@ public sealed class LocalModel : IAsyncLifetime
     }
 }
 
+/// <summary>Editing a message in the middle of a chat: the agent's own session branches there, so it sees the new text only.</summary>
+internal static class LiveEdits
+{
+    public static async Task EditedMessageReplacesTheOldOneAsync(string provider, string? model, string? effort)
+    {
+        using var box = new Sandbox();
+        await using var app = new AppServices(box.Paths);
+        var chats = app.Ai.Chats;
+        var chat = chats.Create(new AiChatRequest { ProviderId = provider, Model = model, Effort = effort, WorkingDirectory = box.Root });
+        async Task<string> Say(string text)
+        {
+            await chats.SendAsync(chat.Id, text);
+            var reply = ChatService.Thread(chat).Last();
+            Assert.Null(reply.Error);
+            return reply.Text;
+        }
+        await Say("Hello! Reply with just: OK");
+        await Say("Remember this: my favourite fruit is apple. Reply with just: OK");
+        Assert.Contains("apple", await Say("What is my favourite fruit? Reply with one word."), StringComparison.OrdinalIgnoreCase);
+
+        var second = ChatService.Thread(chat)[2];
+        await chats.EditAndResendAsync(chat.Id, second.Id, "Remember this: my favourite fruit is mango. Reply with just: OK");
+        Assert.Null(ChatService.Thread(chat).Last().Error);
+        var answer = await Say("What is my favourite fruit? Reply with one word.");
+        Assert.Contains("mango", answer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("apple", answer, StringComparison.OrdinalIgnoreCase);
+        // The branch kept what came before the edit, and the old version is still there to switch back to.
+        var thread = ChatService.Thread(chat);
+        Assert.Equal(6, thread.Count);
+        Assert.Equal("Hello! Reply with just: OK", thread[0].Text);
+        Assert.Equal(2, ChatService.Versions(chat, thread[2]).Count);
+    }
+}
+
 [Trait("Category", "AiLive")]
 public class LiveClaudeTests
 {
@@ -76,6 +110,9 @@ public class LiveClaudeTests
         Assert.Contains("pong", r.Text, StringComparison.OrdinalIgnoreCase);
         Assert.NotNull(r.ProviderSessionId);
     }
+
+    [LiveAiFact]
+    public Task Claude_sees_an_edited_message_and_not_the_old_one() => LiveEdits.EditedMessageReplacesTheOldOneAsync("claude-code", "haiku", "low");
 
     [LiveAiFact]
     public async Task Claude_asks_its_question_and_its_permission_through_the_chat()
@@ -128,5 +165,12 @@ public class LivePiTests(LocalModel model) : IClassFixture<LocalModel>
         Assert.Contains("pong", reply.Text, StringComparison.OrdinalIgnoreCase);
         Assert.NotNull(reply.ProviderSession);
         Assert.True(app.Ai.Chats.Get(chat.Id).ContextTokens > 0);
+    }
+
+    [LiveAiFact]
+    public async Task Pi_sees_an_edited_message_and_not_the_old_one()
+    {
+        Assert.True(model.Problem is null, model.Problem);
+        await LiveEdits.EditedMessageReplacesTheOldOneAsync("pi", Environment.GetEnvironmentVariable("AVAMUX_PI_TEST_MODEL"), null);
     }
 }

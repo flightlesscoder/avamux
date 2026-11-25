@@ -31,6 +31,12 @@ public sealed class AiCapabilities
     /// <summary>Can ask the user questions, through <see cref="AiQuestionRequest"/>.</summary>
     public bool Questions { get; init; }
     public bool ContextUsage { get; init; }
+    /// <summary>
+    /// avamux holds the conversation and gives the model all of it each turn, so a reply edited in AI Chat is what the
+    /// model sees next. Off for agents that keep their own copy (pi, Claude Code): there an edited reply would only
+    /// change avamux's copy, so replies are not editable (editing the user's message branches instead).
+    /// </summary>
+    public bool EditReplies { get; init; }
     /// <summary>Effort or thinking levels, lowest first; empty when there is no such choice.</summary>
     public IReadOnlyList<string> EffortLevels { get; init; } = [];
 }

@@ -230,6 +230,220 @@ public class WorkloadTests
         Assert.Contains("[stop] port free", File.ReadAllText(Path.Combine(box.App.Workloads.RunDir, "script-tiny.launch.log")));
     }
 
+    /// <summary>A start/stop pair like the real ones (a pid file under run/, the server left running in the background).</summary>
+    private static WorkloadProfile ScriptPair(Box box, int port, string name, string? stopScript = null, string? alias = null)
+    {
+        File.WriteAllText(Path.Combine(box.Scripts, $"start-{name}.sh"), $$"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            RUN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run"
+            PORT={{port}}
+            ALIAS="{{alias ?? name + "-" + box.Group}}"
+            mkdir -p "$RUN_DIR"
+            FAKE_LLAMA_LOAD_SECONDS=0 nohup "{{FakeServer}}" --model /models/x.gguf --alias "$ALIAS" --port "$PORT" >> "$RUN_DIR/{{name}}.log" 2>&1 &
+            echo $! > "$RUN_DIR/{{name}}.pid"
+            for i in $(seq 1 50); do curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && echo "[start] healthy" && exit 0; sleep 0.2; done
+            exit 1
+            """);
+        File.WriteAllText(Path.Combine(box.Scripts, $"stop-{name}.sh"), stopScript ?? $$"""
+            #!/usr/bin/env bash
+            RUN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run"
+            kill "$(cat "$RUN_DIR/{{name}}.pid")"; rm -f "$RUN_DIR/{{name}}.pid"; echo "[stop] port free"
+            """);
+        var p = box.App.Workloads.Profiles.Single(x => x.Id == "script:" + name);
+        p.Group = box.Group;
+        box.App.Workloads.PutProfile(p);
+        return box.App.Workloads.GetProfile(p.Id);
+    }
+
+    [Fact]
+    public async Task A_script_server_started_outside_avamux_is_stopped_by_its_script()
+    {
+        await using var box = new Box();
+        var p = ScriptPair(box, FreePort(), "outside");
+        // Started from a shell, as a person would: avamux has never run anything for it (no folder of its own yet).
+        Assert.Equal(0, (await Shell.RunAsync("/bin/bash", [p.StartScript], box.Scripts, timeout: TimeSpan.FromSeconds(30))).ExitCode);
+        Assert.False(Directory.Exists(box.App.Workloads.RunDir));
+        var w = await box.Find(p);
+        Assert.Equal(WorkloadState.Running, w!.State);
+        var pid = w.Pid!.Value;
+        try
+        {
+            var result = await box.App.Workloads.ActAsync("local:profile:" + p.Id, WorkloadActions.Stop);
+            Assert.Equal($"{p.Name} is stopped.", result);
+            Assert.False(ProcessScanner.Alive(pid));
+            Assert.Contains("[stop] port free", File.ReadAllText(Path.Combine(box.App.Workloads.RunDir, "script-outside.launch.log")));
+        }
+        finally { ProcessScanner.Signal(pid, ProcessScanner.SIGKILL); }
+    }
+
+    [Fact]
+    public async Task A_stop_that_leaves_the_server_running_says_so_and_offers_to_end_it()
+    {
+        await using var box = new Box();
+        var p = ScriptPair(box, FreePort(), "stubborn", "#!/bin/sh\necho \"[stop] port is free.\"\n");
+        Assert.Equal(0, (await Shell.RunAsync("/bin/bash", [p.StartScript], box.Scripts, timeout: TimeSpan.FromSeconds(30))).ExitCode);
+        var pid = (await box.Find(p))!.Pid!.Value;
+        try
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => box.App.Workloads.ActAsync("local:profile:" + p.Id, WorkloadActions.Stop));
+            Assert.Contains("ended without an error", error.Message);
+            Assert.Contains($"still running (pid {pid})", error.Message);
+            Assert.True(ProcessScanner.Alive(pid));
+
+            var w = await box.Find(p);
+            Assert.Equal(WorkloadState.Running, w!.State);
+            var end = Assert.Single(w.Actions, a => a.Id == WorkloadActions.Force);
+            Assert.True(end.Danger);
+            Assert.Contains("has ended", await box.App.Workloads.ActAsync("local:profile:" + p.Id, WorkloadActions.Force));
+            Assert.False(ProcessScanner.Alive(pid));
+            Assert.DoesNotContain((await box.Find(p))!.Actions, a => a.Id == WorkloadActions.Force);
+        }
+        finally { ProcessScanner.Signal(pid, ProcessScanner.SIGKILL); }
+    }
+
+    [Fact]
+    public async Task A_stop_left_behind_is_offered_to_end_even_when_another_profile_shows_the_process()
+    {
+        await using var box = new Box();
+        var port = FreePort();
+        // Two script profiles that both describe the one server (the same alias); their stop scripts fail.
+        const string failing = "#!/bin/sh\necho \"cannot stop it\" >&2\nexit 1\n";
+        var first = ScriptPair(box, port, "first", failing);
+        var second = ScriptPair(box, port, "second", failing, alias: first.Alias);
+        Assert.Equal(first.Alias, second.Alias);
+        Assert.Equal(0, (await Shell.RunAsync("/bin/bash", [first.StartScript], box.Scripts, timeout: TimeSpan.FromSeconds(30))).ExitCode);
+        // The listing shows the process as one of them; the other is stopped there, the one this test stops.
+        var shown = (await box.Find(first))!.Pid is not null ? first : second;
+        var other = shown == first ? second : first;
+        var pid = (await box.Find(shown))!.Pid!.Value;
+        try
+        {
+            Assert.Null((await box.Find(other))!.Pid);
+            // Stopped the way a swap, Restart or an idle stop does it (its row offers no Stop).
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => box.App.Workloads.StopProfileAsync(other.Id));
+            Assert.Contains("ended with code 1", error.Message);
+            Assert.Contains($"still running (pid {pid})", error.Message);
+            Assert.Contains("End process", error.Message);
+
+            var end = Assert.Single((await box.Find(other))!.Actions, a => a.Id == WorkloadActions.Force);
+            Assert.Contains($"pid {pid}", end.Confirm);
+            Assert.Contains("has ended", await box.App.Workloads.ActAsync("local:profile:" + other.Id, WorkloadActions.Force));
+            Assert.False(ProcessScanner.Alive(pid));
+            Assert.DoesNotContain((await box.Find(other))!.Actions, a => a.Id == WorkloadActions.Force);
+        }
+        finally { ProcessScanner.Signal(pid, ProcessScanner.SIGKILL); }
+    }
+
+    [Fact]
+    public async Task A_stop_command_gives_the_server_time_to_go()
+    {
+        await using var box = new Box();
+        var port = FreePort();
+        // A server avamux does not recognise (so it knows no process of the profile's), started outside avamux, that
+        // keeps answering for a moment after it is told to stop, as a real one finishing its work does.
+        var toy = Path.Combine(box.Sandbox.Root, "toy-server");
+        File.Copy(FakeServer, toy);
+        File.SetUnixFileMode(toy, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var r = await Shell.RunAsync($"FAKE_LLAMA_LOAD_SECONDS=0 FAKE_LLAMA_STOP_SECONDS=2 '{toy}' --port {port} >/dev/null 2>&1 & echo $!");
+        var pid = int.Parse(r.Stdout.Trim());
+        try
+        {
+            var p = box.App.Workloads.PutProfile(new WorkloadProfile
+            {
+                Name = "toy", Kind = WorkloadProfile.CommandKind, Command = $"'{toy}' --port {port}", Url = ServerProbe.LocalUrl(port),
+                StopCommand = $"kill {pid}", Group = box.Group, StartMinutes = 1,
+            });
+            WorkloadInfo? w = null;
+            for (var i = 0; i < 40 && w?.State != WorkloadState.Running; i++) { await Task.Delay(250); w = await box.Find(p); }
+            Assert.Equal(WorkloadState.Running, w!.State);
+            Assert.Null(w.Pid);
+
+            Assert.Equal("toy is stopped.", await box.App.Workloads.StopProfileAsync(p.Id));
+            Assert.False(ProcessScanner.Alive(pid));
+            Assert.Equal(WorkloadState.Stopped, (await box.Find(p))!.State);
+        }
+        finally { ProcessScanner.Signal(pid, ProcessScanner.SIGKILL); }
+    }
+
+    [Fact]
+    public async Task A_command_profile_is_not_taken_for_the_server_another_profile_runs_on_its_port()
+    {
+        await using var box = new Box();
+        var port = FreePort();
+        var beta = box.Server("beta", port);
+        await box.App.Workloads.StartAsync(beta.Id).WaitAsync(TimeSpan.FromSeconds(60));
+        // No stop command and no process of its own: what answers on its URL is beta.
+        var alpha = box.App.Workloads.PutProfile(new WorkloadProfile
+        {
+            Name = "alpha", Kind = WorkloadProfile.CommandKind, Command = "sleep 600", Url = ServerProbe.LocalUrl(port), Group = box.Group + "-alpha", StartMinutes = 1,
+        });
+        Assert.Equal(WorkloadState.Stopped, (await box.Find(alpha))!.State);
+
+        var result = await box.App.Workloads.StopProfileAsync(alpha.Id);
+        Assert.Contains("found no process of alpha's", result);
+        Assert.Equal(WorkloadState.Running, (await box.Find(beta))!.State);
+    }
+
+    [Fact]
+    public async Task A_busy_server_that_gives_its_next_token_as_an_object_is_still_listed()
+    {
+        await using var box = new Box();
+        var busy = Path.Combine(box.Sandbox.Root, "busy");
+        var p = box.Server("alpha", FreePort(), new() { ["FAKE_LLAMA_LOAD_SECONDS"] = "0.2", ["FAKE_LLAMA_BUSY"] = busy, ["FAKE_LLAMA_NEXT_TOKEN"] = "object" });
+        await box.App.Workloads.StartAsync(p.Id).WaitAsync(TimeSpan.FromSeconds(60));
+        File.WriteAllText(busy, "");
+        var w = await box.Find(p);
+        Assert.Equal(WorkloadState.Busy, w!.State);
+        Assert.Equal("Writing: 42 tokens so far", w.Detail);
+        Assert.Empty((await box.App.Workloads.ListAsync()).Problems);
+    }
+
+    /// <summary>A source that never answers (podman hung, a machine that is off).</summary>
+    private sealed class HungSource : IWorkloadSource
+    {
+        public string Id => "hung";
+        public string Name => "Hung box";
+        public string Machine => "Hung box";
+#pragma warning disable CS0067
+        public event Action? Changed;
+#pragma warning restore CS0067
+        public async Task<WorkloadSnapshot> ListAsync(CancellationToken ct = default) { await Task.Delay(Timeout.Infinite, ct); return new([]); }
+        public Task<string> ActAsync(string workloadId, string action, CancellationToken ct = default) => Task.FromResult("");
+        public Task<string> LogAsync(string workloadId, int lines = 200, CancellationToken ct = default) => Task.FromResult("");
+    }
+
+    [Fact]
+    public async Task A_workload_named_by_its_source_is_looked_for_there_only()
+    {
+        await using var box = new Box();
+        box.App.Workloads.SourceTimeout = TimeSpan.FromSeconds(1);
+        box.App.Workloads.AddSource(new HungSource());
+        // The source does not answer: that is the answer, at once, rather than after every source is asked again.
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => box.App.Workloads.ActAsync("hung:open-webui", WorkloadActions.Stop));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1.9), $"took {watch.Elapsed}");
+        Assert.Equal("Hung box did not answer in 1 seconds, so avamux cannot find 'open-webui' there.", error.Message);
+
+        // A source that answers without it says so, without waiting for the hung one.
+        var p = box.Server("alpha", FreePort());
+        watch.Restart();
+        var missing = await Assert.ThrowsAsync<KeyNotFoundException>(() => box.App.Workloads.FindAsync("local:profile:nothing-" + box.Group));
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(0.9), $"took {watch.Elapsed}");
+        Assert.Contains("in This computer", missing.Message);
+        Assert.Equal(p.Id, (await box.App.Workloads.FindAsync("local:profile:" + p.Id)).Info.ProfileId);
+    }
+
+    [Fact]
+    public async Task A_process_that_cannot_be_signalled_is_reported_as_not_stopped()
+    {
+        // pid 1 belongs to root: avamux may not signal it, and must say so rather than claim it stopped.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+        var why = await ProcessScanner.WhyNotStoppedAsync(1, TimeSpan.FromSeconds(1));
+        Assert.NotNull(why);
+        Assert.Contains("not allowed", why);
+    }
+
     [Fact]
     public void Start_scripts_are_read()
     {
@@ -324,6 +538,36 @@ public class WorkloadTests
         Assert.True(models.Single(m => m.Architecture == "clip").Projector);
         // The second scan comes from the cache.
         Assert.Equal(3, new ModelLibrary(Path.Combine(sandbox.Root, "cache.json")).Scan([Path.Combine(sandbox.Root, "models")]).Count);
+    }
+
+    [Fact]
+    public void A_split_model_comes_from_the_cache_on_the_next_scan()
+    {
+        using var sandbox = new Sandbox();
+        var dir = Path.Combine(sandbox.Root, "models");
+        Directory.CreateDirectory(dir);
+        var shard = Path.Combine(dir, "Big-00001-of-00002.gguf");
+        WriteGguf(shard, "llama", "Big", "70B", 30, 131072, 80, null);
+        WriteGguf(Path.Combine(dir, "Big-00002-of-00002.gguf"), "llama", "Big", "70B", 30, 131072, 80, null);
+        var total = new DirectoryInfo(dir).GetFiles().Sum(f => f.Length);
+        var cache = Path.Combine(sandbox.Root, "cache.json");
+        var lib = new ModelLibrary(cache);
+        Assert.Equal(total, lib.Scan([dir]).Single().Bytes);
+
+        // The first shard's header changes but not its size or time: a scan that read it again would see "gemma".
+        var time = File.GetLastWriteTimeUtc(shard);
+        var size = new FileInfo(shard).Length;
+        WriteGguf(shard, "gemma", "Big", "70B", 30, 131072, 80, null);
+        Assert.Equal(size, new FileInfo(shard).Length);
+        File.SetLastWriteTimeUtc(shard, time);
+
+        foreach (var again in new[] { lib, new ModelLibrary(cache) })
+        {
+            var m = again.Scan([dir]).Single();
+            Assert.Equal("llama", m.Architecture);
+            Assert.Equal(total, m.Bytes);
+            Assert.Equal(2, m.Shards);
+        }
     }
 
     /// <summary>A GGUF file with just a header (and a tokenizer array to skip), padded past the size models are counted from.</summary>

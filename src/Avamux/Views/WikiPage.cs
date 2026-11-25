@@ -75,6 +75,9 @@ public sealed class WikiPage : UserControl, IPage
     private string? _selectedFolder;  // folder new pages go into
     private string _saved = "";
     private bool _loading, _previewReady, _buildingTree, _editable;
+    /// <summary>An entry's right-click menu is open: the tree is not built again under it (it would close), only once it closes.</summary>
+    private ContextMenu? _treeMenu;
+    private bool _treeStale;
     private int _mode = 1;            // 0 edit, 1 split, 2 preview — the user's choice for editable files
     private double? _pendingPreviewScroll;
     private DateTime _lastOwnWrite;
@@ -210,6 +213,12 @@ public sealed class WikiPage : UserControl, IPage
         // handled them already as a text drop: listen to handled ones too.
         AddHandler(DragDrop.DragOverEvent, OnDragOver, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(DragDrop.DropEvent, OnDrop, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
+        // A right-click opens an entry's menu without picking the entry: picking a page opens it, which builds the
+        // tree again and takes away the entry the menu was for.
+        _tree.AddHandler(PointerPressedEvent, (_, e) =>
+        {
+            if (e.GetCurrentPoint(_tree).Properties.IsRightButtonPressed) e.Handled = true;
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         _tree.SelectionChanged += (_, _) =>
         {
             if (_buildingTree || (_tree.SelectedItem as TreeViewItem)?.Tag is not WikiNode node) return;
@@ -388,6 +397,7 @@ public sealed class WikiPage : UserControl, IPage
     private void BuildTree()
     {
         if (_standalone) return;
+        if (_treeMenu is not null) { _treeStale = true; return; }
         _buildingTree = true;
         try
         {
@@ -486,11 +496,13 @@ public sealed class WikiPage : UserControl, IPage
             menu.Items.Add(Ui.Item("Open in New Window", () => WikiWindow.Show(node.Path, this), icon: Icons.OpenInNew));
             menu.Items.Add(Ui.Item("Open in Default App", () => Shell.Open(Wiki.Resolve(node.Path))));
             menu.Items.Add(new Separator());
+            menu.Items.Add(Ui.Item("New Folder…", () => _ = NewFolderAsync(FolderOf(node.Path)))); // beside the page
+            menu.Items.Add(new Separator());
         }
         else
         {
-            menu.Items.Add(Ui.Item("New Page Here…", () => { _selectedFolder = node.Path; _ = NewPageAsync(); }));
-            menu.Items.Add(Ui.Item("New Folder Here…", () => { _selectedFolder = node.Path; _ = NewFolderAsync(); }));
+            menu.Items.Add(Ui.Item("New Page Here…", () => _ = NewPageAsync(node.Path)));
+            menu.Items.Add(Ui.Item("New Folder Here…", () => _ = NewFolderAsync(node.Path)));
             menu.Items.Add(new Separator());
         }
         menu.Items.Add(Ui.Item("Show in Folder", () => Shell.ShowInFolder(Wiki.Resolve(node.Path))));
@@ -503,6 +515,15 @@ public sealed class WikiPage : UserControl, IPage
             Menu = Avamux.Plugins.Menus.WikiTree, WikiPath = node.Path, IsFolder = node.IsFolder,
             Editor = !node.IsFolder && node.Path == _path && _editable ? EditorAccess : null,
         });
+        menu.Opened += (_, _) => _treeMenu = menu;
+        menu.Closed += (_, _) =>
+        {
+            if (_treeMenu != menu) return;
+            _treeMenu = null;
+            if (!_treeStale) return;
+            _treeStale = false;
+            Dispatcher.UIThread.Post(() => { if (VisualRoot is not null) BuildTree(); }); // shown again later builds it anyway
+        };
         return menu;
     }
 
@@ -1088,9 +1109,10 @@ public sealed class WikiPage : UserControl, IPage
 
     // ---- actions ----
 
-    private async Task NewPageAsync()
+    /// <summary>A new page in <paramref name="inFolder"/> (a menu's), else the selected folder. The selection stays as it was.</summary>
+    private async Task NewPageAsync(string? inFolder = null)
     {
-        var folder = _selectedFolder ?? "";
+        var folder = inFolder ?? _selectedFolder ?? "";
         var name = await Ui.PromptAsync(Ui.Owner(this), "New page", folder.Length > 0 ? $"Page name (in {folder}/). Use / to create folders." : "Page name. Use / to create folders.");
         if (string.IsNullOrWhiteSpace(name)) return;
         Ui.Try(this, () =>
@@ -1101,9 +1123,10 @@ public sealed class WikiPage : UserControl, IPage
         }, "Could not create the page");
     }
 
-    private async Task NewFolderAsync()
+    /// <summary>A new folder in <paramref name="inFolder"/> (a menu's), else the selected folder. The selection stays as it was.</summary>
+    private async Task NewFolderAsync(string? inFolder = null)
     {
-        var folder = _selectedFolder ?? "";
+        var folder = inFolder ?? _selectedFolder ?? "";
         var name = await Ui.PromptAsync(Ui.Owner(this), "New folder", folder.Length > 0 ? $"Folder name (in {folder}/)" : "Folder name");
         if (string.IsNullOrWhiteSpace(name)) return;
         Ui.Try(this, () => Wiki.CreateFolder((folder.Length > 0 ? folder + "/" : "") + name.Trim().Trim('/')), "Could not create the folder");

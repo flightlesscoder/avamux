@@ -525,6 +525,12 @@ and say why one failed.
   unless you insist. It also names other programs holding GPU memory (a game), and warns when a server is left with
   less than 800 MiB of the card. Servers avamux starts keep running when it quits; closing the window asks whether to
   stop them.
+- **Stopping** a script profile runs its stop script, then checks that the server really is gone (its process, and
+  nothing answering on its address). If the script reports success but the server is still there, avamux says so,
+  with the pid, and the row offers **End process** (SIGTERM, then SIGKILL). A process avamux may not signal, or one
+  that survives SIGKILL, is reported as not stopped, with the reason. The row says "Stopping…" from the click on (a
+  stop script can wait half a minute for the server to let go of the GPU), and every action and its outcome is
+  written to the app log.
 - **Why it failed**: the end of the log, read for the usual reasons (out of GPU memory, port in use, RPC built from
   another commit, a missing library or model, an unknown architecture) in plain words.
 - **Tasks and jobs**: AI Chat replies and AI Actions in progress (stop them, or open the chat), recent runs and how

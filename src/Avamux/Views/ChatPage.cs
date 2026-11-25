@@ -9,6 +9,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Avamux.Core.Ai;
 using Avamux.Plugins;
 
@@ -41,6 +42,10 @@ public sealed class ChatPage : UserControl, IPage
     private readonly ScrollViewer _scroll = new() { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
     private readonly ItemsControl _messages = new();
     private readonly ObservableCollection<ChatRow> _rows = [];
+    /// <summary>Parts of messages opened or closed by hand (thinking, tool calls), by message: they stay so as replies are written.</summary>
+    internal readonly Dictionary<string, bool> Expanded = [];
+    /// <summary>Messages being edited, by id: the editor stays while the chat updates.</summary>
+    internal readonly Dictionary<string, ChatMessageView.EditState> Editing = [];
     private readonly StackPanel _cards = new() { Spacing = 8, Margin = new Thickness(18, 0, 18, 8) };
     private readonly TextBox _input = new()
     {
@@ -54,6 +59,9 @@ public sealed class ChatPage : UserControl, IPage
     private readonly TextBlock _empty = new() { TextWrapping = TextWrapping.Wrap, Foreground = Ui.Dim, FontSize = 13.5, Margin = new Thickness(24), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center };
     private readonly Dictionary<string, Action> _refreshers = [];
     private string? _chatId;
+    /// <summary>A chat's right-click menu, while open: the list is not refreshed under it (a busy chat refreshes it often), only once it closes.</summary>
+    private ContextMenu? _chatMenu;
+    private bool _listStale;
     private bool _stick = true, _loadingHeader;
     private SpeechService.Spoken? _autoSpoken;
     private string? _autoSpokenId;
@@ -65,6 +73,21 @@ public sealed class ChatPage : UserControl, IPage
     {
         _chats.ItemTemplate = new FuncDataTemplate<AiChat>((c, _) => c is null ? new Panel() : ChatItem(c));
         _chats.SelectionChanged += (_, _) => { if (_chats.SelectedItem is AiChat c && c.Id != _chatId) Open(c.Id); };
+        // On the entry itself, not on what it shows: a right-click on its padding, or beside a short title, opens it too.
+        _chats.ContextRequested += (_, e) =>
+        {
+            if ((e.Source as Visual)?.FindAncestorOfType<ListBoxItem>(includeSelf: true) is not { DataContext: AiChat c } entry) return;
+            e.Handled = true;
+            var menu = ChatMenu(c);
+            menu.Opened += (_, _) => _chatMenu = menu;
+            menu.Closed += (_, _) =>
+            {
+                if (_chatMenu != menu) return;
+                _chatMenu = null;
+                if (_listStale) { _listStale = false; Dispatcher.UIThread.Post(RefreshList); }
+            };
+            menu.Open(entry);
+        };
         _search.TextChanged += (_, _) => RefreshList();
         var left = new DockPanel
         {
@@ -214,23 +237,30 @@ public sealed class ChatPage : UserControl, IPage
         if (waiting) title.Children.Add(Ui.Dot("warn", 8));
         else if (busy) title.Children.Add(Ui.Dot("info", 8));
         var provider = Ai.Config(c.ProviderId)?.Name ?? c.ProviderId;
-        var item = new StackPanel
+        return new StackPanel
         {
             Spacing = 1, Background = Brushes.Transparent,
             Children = { title, new TextBlock { Text = $"{Ui.Ago(c.Updated)} · {provider}{(c.Model.Length > 0 ? " · " + c.Model : "")}", FontSize = 11, Foreground = Ui.Dim, TextTrimming = TextTrimming.CharacterEllipsis } },
         };
+    }
+
+    private ContextMenu ChatMenu(AiChat c)
+    {
         var menu = new ContextMenu();
         menu.Items.Add(Ui.Item("Rename…", () => _ = RenameAsync(c.Id), icon: Icons.Pencil));
         menu.Items.Add(Ui.Item(c.Pinned ? "Unpin" : "Pin to the Top", () => Chats.Pin(c.Id, !c.Pinned), icon: Icons.Pin));
         menu.Items.Add(Ui.Item("Show Its Folder", () => Avamux.Core.Shell.Open(Chats.FolderOf(c.Id))));
         menu.Items.Add(new Separator());
         menu.Items.Add(Ui.Item("Delete…", () => _ = DeleteAsync(c.Id), icon: Icons.Delete));
-        item.ContextMenu = menu;
-        return item;
+        return menu;
     }
+
+    /// <summary>The chat menu open, for tests.</summary>
+    internal ContextMenu? ChatMenuShown => _chatMenu is { IsOpen: true } ? _chatMenu : null;
 
     private void RefreshList()
     {
+        if (_chatMenu is not null) { _listStale = true; return; }
         var q = (_search.Text ?? "").Trim();
         var list = Chats.List().Where(c => q.Length == 0 || c.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
                                                         || c.Messages.Any(m => m.Text.Contains(q, StringComparison.OrdinalIgnoreCase))).ToList();

@@ -121,13 +121,20 @@ public static class ServerProbe
         if (await GetJsonAsync(baseUrl + "/slots", ct) is JsonArray slotList)
         {
             slots = Math.Max(slots, slotList.Count);
-            foreach (var s in slotList)
+            // Builds of llama-server differ in what a slot holds (next_token is an array in some, an object in others):
+            // a slot that cannot be read is skipped, never the whole server.
+            foreach (var s in slotList.OfType<JsonObject>())
             {
-                activity = (activity ?? 0) + (Long(s?["id_task"]) ?? 0);
-                if (s?["is_processing"]?.GetValue<bool>() != true) continue;
-                busy = true;
-                var decoded = Long(s["next_token"]?[0]?["n_decoded"]) ?? Long(s["n_decoded"]);
-                if (decoded is { } n) detail = $"Writing: {n:N0} tokens so far";
+                try
+                {
+                    activity = (activity ?? 0) + (Long(s["id_task"]) ?? 0);
+                    if (!(s["is_processing"] is JsonValue processing && processing.TryGetValue<bool>(out var on) && on)) continue;
+                    busy = true;
+                    var next = s["next_token"] is JsonArray { Count: > 0 } tokens ? tokens[0] : s["next_token"];
+                    var decoded = Long((next as JsonObject)?["n_decoded"]) ?? Long(s["n_decoded"]);
+                    if (decoded is { } n) detail = $"Writing: {n:N0} tokens so far";
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or FormatException) { }
             }
         }
         if (model is null && await GetJsonAsync(baseUrl + "/v1/models", ct) is { } m) model = FirstModel(m);

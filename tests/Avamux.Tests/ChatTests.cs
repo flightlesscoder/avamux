@@ -88,16 +88,38 @@ public class ChatTests
     {
         await using var b = new AiTests.Box();
         var chats = b.App.Ai.Chats;
-        var chat = chats.Create(new AiChatRequest { ProviderId = "claude" });
+        // A provider avamux gives the whole conversation each turn (echo prints what it was given).
+        b.App.Ai.Put(new AiProviderConfig { Id = "echo", Kind = CommandProvider.KindId, Name = "Echo", Command = "echo", Options = { ["template"] = "{prompt}", ["output"] = "text" } });
+        var chat = chats.Create(new AiChatRequest { ProviderId = "echo" });
         await chats.SendAsync(chat.Id, "hi");
         var reply = ChatService.Thread(chat)[1];
+        Assert.True(chats.CanEditReplies(chat.Id));
         chats.EditReply(chat.Id, reply.Id, "my own words");
         Assert.True(reply.Edited);
         Assert.Equal("my own words", ChatService.Thread(chat)[1].Text);
+        // The next turn is given the edited reply.
+        await chats.SendAsync(chat.Id, "and then?");
+        Assert.Contains("Assistant: my own words", ChatService.Thread(chat)[3].Text);
         await chats.RetryAsync(chat.Id, reply.Id);
         var thread = ChatService.Thread(chat);
-        Assert.Equal("Echo: hi", thread[1].Text.Trim());
         Assert.Equal(2, ChatService.Versions(chat, thread[0]).Count);
+    }
+
+    [Fact]
+    public async Task Replies_of_agents_that_keep_their_own_conversation_cannot_be_edited()
+    {
+        await using var b = new AiTests.Box();
+        var chats = b.App.Ai.Chats;
+        var chat = chats.Create(new AiChatRequest { ProviderId = "claude" });
+        await chats.SendAsync(chat.Id, "hi");
+        var reply = ChatService.Thread(chat)[1];
+        Assert.False(chats.CanEditReplies(chat.Id));
+        Assert.Throws<InvalidOperationException>(() => chats.EditReply(chat.Id, reply.Id, "my own words"));
+        Assert.Equal("Echo: hi", reply.Text.Trim());
+        Assert.False(reply.Edited);
+        // Writing it again (a branch the agent sees) still works.
+        await chats.RetryAsync(chat.Id, reply.Id);
+        Assert.Equal(2, ChatService.Versions(chat, ChatService.Thread(chat)[0]).Count);
     }
 
     [Fact]

@@ -27,6 +27,8 @@ public sealed class ModelFile
     /// <summary>A vision/audio projector (mmproj) rather than a model on its own.</summary>
     public bool Projector { get; set; }
     public string? Error { get; set; }
+
+    internal ModelFile Copy() => (ModelFile)MemberwiseClone();
 }
 
 /// <summary>
@@ -91,13 +93,14 @@ public sealed partial class ModelLibrary(string cacheFile)
         foreach (var (_, parts) in shards)
         {
             var first = parts.OrderBy(p => p.Name, StringComparer.Ordinal).First();
-            var m = Describe(first);
+            // A copy: the cache keeps what the first shard's own header and size say, so the next scan finds it there.
+            var m = Describe(first).Copy();
             m.Name = Shard().Replace(first.Name, "");
             m.Bytes = parts.Sum(p => p.Length);
             m.Shards = parts.Count;
             found[first.FullName] = m;
         }
-        SaveCache(found);
+        SaveCache();
         return found.Values.OrderByDescending(m => m.Bytes).ToList();
     }
 
@@ -132,16 +135,16 @@ public sealed partial class ModelLibrary(string cacheFile)
         }
     }
 
-    private void SaveCache(Dictionary<string, ModelFile> found)
+    /// <summary>
+    /// Saves every file's entry: Describe put each one there, and what was found in folders not scanned this time is
+    /// kept, so scanning one folder does not forget the rest. A sharded model's entry is its first shard alone (its
+    /// own size, which the next scan compares), never the model's total.
+    /// </summary>
+    private void SaveCache()
     {
         try
         {
-            lock (_gate)
-            {
-                // Keep what was found in folders not scanned this time, so scanning one folder does not forget the rest.
-                foreach (var (k, v) in found) _cache![k] = v;
-                JsonUtil.SaveFile(cacheFile, _cache);
-            }
+            lock (_gate) JsonUtil.SaveFile(cacheFile, _cache);
         }
         catch (Exception ex) { Log.Warn("workloads", "Could not save the model cache: " + ex.Message); }
     }

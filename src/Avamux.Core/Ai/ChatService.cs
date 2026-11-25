@@ -103,6 +103,8 @@ public sealed class ChatService : IAsyncDisposable
         public required IAiSession Session { get; init; }
         /// <summary>Which provider conversation the session is on, and with what, so a change of branch or provider starts another.</summary>
         public required string Key { get; set; }
+        /// <summary>A reply it wrote was edited since: the next message starts a session given the conversation as it is now.</summary>
+        public bool Stale { get; set; }
         public AiChatMessage? Writing { get; set; }
         public DateTime? ThinkingSince { get; set; }
         public List<PendingRequest> Requests { get; } = [];
@@ -352,9 +354,18 @@ public sealed class ChatService : IAsyncDisposable
         return EditAndResendAsync(chatId, user.Id, user.Text);
     }
 
-    /// <summary>Changes the saved text of a reply (nothing is sent again).</summary>
+    /// <summary>
+    /// Whether a chat's replies can be edited: only when its provider is given the whole conversation by avamux each
+    /// turn (<see cref="AiCapabilities.EditReplies"/>). An agent that keeps its own copy would never see the edit.
+    /// </summary>
+    public bool CanEditReplies(string chatId) =>
+        Find(chatId) is { } c && _ai.Config(c.ProviderId) is { } config && _ai.Kind(config.Kind)?.Capabilities.EditReplies == true;
+
+    /// <summary>Changes the saved text of a reply (nothing is sent again). Refused when the provider would not see it (<see cref="CanEditReplies"/>).</summary>
     public void EditReply(string chatId, string messageId, string text)
     {
+        if (!CanEditReplies(chatId))
+            throw new InvalidOperationException("This chat's agent keeps its own copy of the conversation, so an edited reply would not reach it. Edit your message instead: that sends a new version.");
         var c = Get(chatId);
         lock (c)
         {
@@ -363,6 +374,8 @@ public sealed class ChatService : IAsyncDisposable
             m.Text = text;
             m.Edited = true;
         }
+        // The open session remembers the reply as it was written.
+        lock (_gate) if (_live.TryGetValue(c.Id, out var live)) live.Stale = true;
         Touched(c);
     }
 
@@ -467,7 +480,7 @@ public sealed class ChatService : IAsyncDisposable
         var key = KeyFor(c, resume ?? "");
         Live? live;
         lock (_gate) _live.TryGetValue(c.Id, out live);
-        if (live is not null && (fork || live.Key != key)) { await DropLiveAsync(c.Id); live = null; }
+        if (live is not null && (fork || live.Key != key || live.Stale)) { await DropLiveAsync(c.Id); live = null; }
         if (live is null)
         {
             // A branch: from the conversation before the edited message. Its first message has nothing before it: start afresh.

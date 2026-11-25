@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Text.RegularExpressions;
+using Avamux.Core.Logging;
 using Avamux.Plugins;
 
 namespace Avamux.Core.Workloads;
@@ -95,17 +96,25 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
     {
         var (found, all, _) = await ScanAsync(ct);
         var claimed = new HashSet<int>();
+        var profiles = svc.Profiles.ToList();
+        // Every profile's process first, so a profile knows which ports belong to the others' before it is described.
+        var matches = new Dictionary<string, Found?>();
+        foreach (var p in profiles.Where(p => p.Kind is not (WorkloadProfile.Rpc or WorkloadProfile.Api)))
+        {
+            var match = Match(p, found, claimed);
+            if (match is not null) claimed.Add(match.Proc.Pid);
+            matches[p.Id] = match;
+        }
+        var claimedPorts = found.Where(f => claimed.Contains(f.Proc.Pid)).SelectMany(f => f.Ports).ToHashSet();
         var items = new List<Task<WorkloadInfo?>>();
-        foreach (var p in svc.Profiles)
+        foreach (var p in profiles)
         {
             switch (p.Kind)
             {
                 case WorkloadProfile.Rpc: items.Add(RpcAsync(p, found, claimed, ct)!); continue;
                 case WorkloadProfile.Api: items.Add(ApiAsync(p, ct)!); continue;
             }
-            var match = Match(p, found, claimed);
-            if (match is not null) claimed.Add(match.Proc.Pid);
-            items.Add(ProfileAsync(p, match, ct));
+            items.Add(ProfileAsync(p, matches.GetValueOrDefault(p.Id), found, claimedPorts, ct));
         }
         var me = Environment.ProcessId;
         foreach (var f in found.Where(f => !claimed.Contains(f.Proc.Pid)))
@@ -128,7 +137,9 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
         return d.TotalMinutes < 1 ? "in under a minute" : d.TotalHours < 1 ? $"in {d.TotalMinutes:0} minutes" : d.TotalDays < 2 ? $"in {d.TotalHours:0.#} hours" : "much later";
     }
 
-    private async Task<WorkloadInfo?> ProfileAsync(WorkloadProfile p, Found? f, CancellationToken ct)
+    /// <param name="found">Every AI program running, for a process a stop left behind that another profile now shows.</param>
+    /// <param name="claimedPorts">The ports of the processes profiles were matched with.</param>
+    private async Task<WorkloadInfo?> ProfileAsync(WorkloadProfile p, Found? f, List<Found> found, HashSet<int> claimedPorts, CancellationToken ct)
     {
         var op = svc.OperationOf(p.Id);
         if (f is null && op is null && p.Hidden) return null;
@@ -137,9 +148,10 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
         var url = p.BaseUrl;
         ServerStatus? status = null;
         if (f is not null && url is not null) status = await ServerProbe.ProbeAsync(url, ct);
-        else if (f is null && op is null && p.Kind == WorkloadProfile.CommandKind && url is not null)
+        else if (f is null && op is null && p.Kind == WorkloadProfile.CommandKind && url is not null && !OnClaimedPort(url, claimedPorts))
         {
-            // A command profile started some other way still answers on its URL.
+            // A command profile started some other way still answers on its URL (unless what answers there is another
+            // profile's server: profiles share ports).
             var s = await ServerProbe.ProbeAsync(url, ct);
             if (s.Answering) status = s;
         }
@@ -155,6 +167,10 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
         else if (op is { Error: { } e }) { state = WorkloadState.Failed; error = e; }
         else state = WorkloadState.Stopped;
 
+        // A process a stop left running is offered to end for as long as it runs, even when another profile that
+        // describes the same process shows it (and this one looks stopped).
+        int? stopLeft = svc.StopLeft(p.Id) is { } l && found.Any(x => x.Proc.Pid == l) ? l : null;
+        if (stopLeft is null) svc.ForgetStopLeft(p.Id);
         var actions = new List<WorkloadAction>();
         switch (state)
         {
@@ -170,6 +186,8 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
                 actions.Add(new(WorkloadActions.Restart, "Restart"));
                 break;
         }
+        if (stopLeft is { } left && state is not WorkloadState.Stopping && op is not { Finished: null })
+            actions.Add(new(WorkloadActions.Force, "End process", $"Stopping {p.Name} left its process (pid {left}) running. End it (SIGTERM, then SIGKILL after 30 seconds)?", Danger: true));
         var facts = new Dictionary<string, string> { ["Profile"] = p.Kind == WorkloadProfile.ScriptKind ? "start/stop scripts" : p.Kind };
         if (p.StartScript.Length > 0) facts["Start script"] = p.StartScript;
         if (p.Model.Length > 0) facts["Model file"] = p.Model;
@@ -190,6 +208,10 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
             ByAvamux = running && svc.StartedByAvamux(wid), Folder = p.Folder.Length > 0 ? p.Folder : null, ProfileId = p.Id, Actions = actions, Facts = facts,
         };
     }
+
+    /// <summary>Whether a URL on this computer is on a port one of the profiles' servers listens on.</summary>
+    private static bool OnClaimedPort(string url, HashSet<int> claimedPorts) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var u) && (u.IsLoopback || u.Host == "0.0.0.0") && claimedPorts.Contains(u.Port);
 
     private async Task<WorkloadInfo?> ProcessAsync(Found f, Dictionary<int, ProcInfo> all, int me, CancellationToken ct)
     {
@@ -339,6 +361,14 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
             {
                 case WorkloadActions.Start: return await svc.StartAsync(p.Id, ct: ct);
                 case WorkloadActions.Stop: return await svc.StopProfileAsync(p.Id, ct);
+                case WorkloadActions.Force:
+                {
+                    var left = svc.StopLeft(p.Id) ?? throw new InvalidOperationException($"{p.Name} has no process left over from a stop.");
+                    if (await ProcessScanner.WhyNotStoppedAsync(left, TimeSpan.FromSeconds(30), ct) is { } why)
+                        throw new InvalidOperationException($"{p.Name} (pid {left}) did not end: {why}.");
+                    svc.ForgetStopLeft(p.Id);
+                    return $"{p.Name} (pid {left}) has ended.";
+                }
                 case WorkloadActions.Restart: await svc.StopProfileAsync(p.Id, ct); return await svc.StartAsync(p.Id, new StartOptions { StopOthers = true }, ct);
                 case WorkloadActions.Cancel: return svc.CancelStart(p.Id) ? "Cancelling the start." : "It is not starting.";
                 case "dismiss": svc.Dismiss(p.Id); return "Dismissed.";
@@ -352,7 +382,9 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
                 await svc.App.Speech.ShutdownAsync();
                 return "Kokoro is stopped (it starts again the next time something is spoken).";
             }
-            return await ProcessScanner.StopAsync(pid, TimeSpan.FromSeconds(30), ct) ? $"{proc.Name} (pid {pid}) is stopped." : $"{proc.Name} (pid {pid}) did not stop.";
+            if (await ProcessScanner.WhyNotStoppedAsync(pid, TimeSpan.FromSeconds(30), ct) is { } why)
+                throw new InvalidOperationException($"{proc.Name} (pid {pid}) did not stop: {why}.");
+            return $"{proc.Name} (pid {pid}) is stopped.";
         }
         else if (workloadId.StartsWith(OllamaPrefix, StringComparison.Ordinal) && action == WorkloadActions.Unload)
         {
@@ -533,14 +565,25 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
     internal async Task<string> StopProfileAsync(WorkloadProfile p, CancellationToken ct)
     {
         if (p.Kind == WorkloadProfile.Rpc) return await RpcActAsync(p, WorkloadActions.Stop, ct);
+        // Its process as it was before anything was done: once that is known and has gone, what answers on its
+        // address is another server (profiles share ports).
+        var before = Match(p, (await ScanAsync(ct)).Found, []);
         if (p.Kind == WorkloadProfile.ScriptKind)
         {
             var r = await Shell.RunAsync("/bin/bash", [p.StopScript], p.Folder, timeout: TimeSpan.FromMinutes(2), ct: ct);
-            await File.AppendAllTextAsync(svc.LaunchLogOf(p), $"\n[avamux] {DateTime.Now:yyyy-MM-dd HH:mm:ss} stopping\n{r.Stdout}{r.Stderr}", ct);
-            if (r.ExitCode != 0) throw new InvalidOperationException($"Its stop script ended with code {r.ExitCode}: {Last(r.Stderr) ?? Last(r.Stdout)}");
-            return Last(r.Stdout) ?? $"{p.Name} is stopped.";
+            NoteLaunchLog(p, $"\n[avamux] {DateTime.Now:yyyy-MM-dd HH:mm:ss} stopping\n{r.Stdout}{r.Stderr}" + (r.ExitCode != 0 ? $"[avamux] exit code {r.ExitCode}\n" : ""));
+            var script = Path.GetFileName(p.StopScript);
+            // Even a script that failed may have begun the stop: a few seconds before what is left is noted (and offered to end).
+            if (r.ExitCode != 0)
+                throw new InvalidOperationException($"Its stop script ({script}) ended with code {r.ExitCode}: {Last(r.Stderr) ?? Last(r.Stdout) ?? "no output"}" +
+                    (await StillThereAsync(p, before, TimeSpan.FromSeconds(5), ct) is { } remains ? $" {remains}" : ""));
+            // The script says it is done: check, rather than take its word for it.
+            if (await StillThereAsync(p, before, TimeSpan.FromSeconds(10), ct) is { } still)
+                throw new InvalidOperationException($"Its stop script ({script}) ended without an error, but {still}");
+            return $"{p.Name} is stopped." + (Warning(r.Stderr) is { } warn ? $" Its stop script said: {warn}" : "");
         }
-        if (p.StopCommand.Length > 0)
+        var stopCommand = p.StopCommand.Length > 0;
+        if (stopCommand)
         {
             var r = await Shell.RunAsync(p.StopCommand, p.Folder.Length > 0 ? WorkloadService.AiPath(p.Folder) : null, timeout: TimeSpan.FromMinutes(2), ct: ct);
             if (r.ExitCode != 0) throw new InvalidOperationException($"Its stop command ended with code {r.ExitCode}: {Last(r.Stderr) ?? Last(r.Stdout)}");
@@ -548,8 +591,61 @@ internal sealed partial class LocalSource(WorkloadService svc) : IWorkloadSource
         var (found, _, _) = await ScanAsync(ct);
         var match = Match(p, found, []);
         var pid = match?.Proc.Pid ?? Launcher.ReadPid(svc.PidFileOf(p));
-        if (pid is { } x && !await ProcessScanner.StopAsync(x, TimeSpan.FromSeconds(30), ct)) throw new InvalidOperationException($"{p.Name} (pid {x}) did not stop.");
+        if (pid is { } x && await ProcessScanner.WhyNotStoppedAsync(x, TimeSpan.FromSeconds(30), ct) is { } why)
+            throw new InvalidOperationException($"{p.Name} (pid {x}) did not stop: {why}.");
         try { File.Delete(svc.PidFileOf(p)); } catch { }
-        return pid is null && p.StopCommand.Length == 0 ? $"{p.Name} was not running." : $"{p.Name} is stopped.";
+        if (pid is null && !stopCommand && before is null)
+        {
+            // Nothing to stop, and nothing was done: whatever answers on its address is not something avamux can tell is it.
+            if (p.BaseUrl is { } url && (await ServerProbe.ProbeAsync(url, ct)).Answering)
+                return $"avamux found no process of {p.Name}'s to stop. Something answers on {url}, but avamux cannot tell that it is {p.Name}: " +
+                       "stop it from its own row, or give the profile a stop command.";
+            return $"{p.Name} was not running.";
+        }
+        // A stop command returns once it has asked: the server may take a few seconds to go, as a signalled one does.
+        if (await StillThereAsync(p, before ?? match, TimeSpan.FromSeconds(5), ct) is { } left)
+            throw new InvalidOperationException(left);
+        return $"{p.Name} is stopped.";
+    }
+
+    /// <summary>
+    /// What is left of a profile's server after a stop, waiting up to <paramref name="wait"/> for it to go: its process
+    /// (the one seen before the stop, or one matching the profile). When its process was never known, its address
+    /// answering counts too; when it was, and it has gone, what answers there is another server (they share ports).
+    /// Null when nothing is left.
+    /// </summary>
+    private async Task<string?> StillThereAsync(WorkloadProfile p, Found? before, TimeSpan wait, CancellationToken ct)
+    {
+        var until = DateTime.UtcNow + wait;
+        while (true)
+        {
+            var (found, _, _) = await ScanAsync(ct);
+            var proc = before is not null && ProcessScanner.Alive(before.Proc.Pid) ? before : Match(p, found, []);
+            var answering = proc is null && before is null && p.BaseUrl is { } url && (await ServerProbe.ProbeAsync(url, ct)).Answering ? url : null;
+            if (proc is null && answering is null) { svc.ForgetStopLeft(p.Id); return null; }
+            if (DateTime.UtcNow >= until)
+            {
+                if (proc is null) return $"something still answers on {answering}.";
+                svc.NoteStopLeft(p.Id, proc.Proc.Pid);
+                return $"{p.Name} is still running (pid {proc.Proc.Pid}). \"End process\" on its row ends it (or: avamux ai workloads act {WorkloadService.LocalSourceId}:{ProfilePrefix}{p.Id} {WorkloadActions.Force}).";
+            }
+            await Task.Delay(500, ct);
+        }
+    }
+
+    /// <summary>A line a stop script wrote to stderr that reads as a warning, if any.</summary>
+    private static string? Warning(string stderr) =>
+        stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault(l => l.Contains("warn", StringComparison.OrdinalIgnoreCase) || l.Contains("error", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Adds to a script profile's start/stop log. A log that cannot be written never fails the start or stop itself.</summary>
+    private void NoteLaunchLog(WorkloadProfile p, string text)
+    {
+        try
+        {
+            var file = svc.LaunchLogOf(p);
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            File.AppendAllText(file, text);
+        }
+        catch (Exception ex) { Log.Warn("workloads", $"Could not write {p.Name}'s start/stop log: {ex.Message}"); }
     }
 }

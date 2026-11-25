@@ -127,6 +127,9 @@ public sealed class WorkloadService : IAsyncDisposable
         get { List<IWorkloadLeaseProvider> extra; lock (_gate) extra = [.. _extraLeases]; return [.. _app.Plugins.LeaseProviders(), .. extra]; }
     }
 
+    /// <summary>How long a source is given to say what it has (tests shorten it).</summary>
+    internal TimeSpan SourceTimeout { get; set; } = TimeSpan.FromSeconds(8);
+
     /// <summary>Asks every source what it has (all at once; a slow or failing source only costs its own part).</summary>
     public async Task<WorkloadOverview> ListAsync(CancellationToken ct = default)
     {
@@ -135,7 +138,7 @@ public sealed class WorkloadService : IAsyncDisposable
         var results = await Task.WhenAll(sources.Select(async s =>
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(8));
+            cts.CancelAfter(SourceTimeout);
             try { return (s, snap: await s.ListAsync(cts.Token)); }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
@@ -163,6 +166,27 @@ public sealed class WorkloadService : IAsyncDisposable
 
     public async Task<WorkloadEntry> FindAsync(string id, CancellationToken ct = default)
     {
+        // "<source>:<id>": ask only that source, so a slow one (podman, another machine) cannot hold up acting on this
+        // one. Its answer is the answer: asking every source after it failed would wait for it (and the others) again.
+        if (id.IndexOf(':') is var colon and > 0 && Sources.FirstOrDefault(s => s.Id == id[..colon]) is { } source)
+        {
+            var mine = id[(colon + 1)..];
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(SourceTimeout);
+            WorkloadSnapshot snap;
+            try { snap = await source.ListAsync(cts.Token); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new InvalidOperationException($"{source.Name} did not answer in {SourceTimeout.TotalSeconds:0.#} seconds, so avamux cannot find '{mine}' there.");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw new InvalidOperationException($"{source.Name} could not be asked for '{mine}': {ex.GetBaseException().Message}", ex);
+            }
+            return snap.Items.FirstOrDefault(i => i.Id == mine) is { } found
+                ? new WorkloadEntry(source.Id, source.Name, source.Machine, found)
+                : throw new KeyNotFoundException($"No workload '{mine}' in {source.Name}" + (snap.Problem is { Length: > 0 } problem ? $" ({problem})" : "") + ". See `avamux ai workloads list`.");
+        }
         var all = (await ListAsync(ct)).Items;
         return all.FirstOrDefault(e => e.Id == id)
             ?? all.FirstOrDefault(e => e.Info.Id == id)
@@ -177,9 +201,19 @@ public sealed class WorkloadService : IAsyncDisposable
         if (entry.Info.Actions.All(a => a.Id != action))
             throw new InvalidOperationException($"{entry.Info.Name} cannot {action} (it offers: {string.Join(", ", entry.Info.Actions.Select(a => a.Id))}).");
         var source = Sources.First(s => s.Id == entry.SourceId);
-        var result = await source.ActAsync(entry.Info.Id, action, ct);
-        Changed?.Invoke();
-        return result;
+        Log.Info("workloads", $"{action}: {entry.Info.Name} ({entry.Id})");
+        try
+        {
+            var result = await source.ActAsync(entry.Info.Id, action, ct);
+            Log.Info("workloads", $"{action}: {entry.Info.Name}: {result}");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("workloads", $"{action}: {entry.Info.Name} failed: {ex.GetBaseException().Message}");
+            throw;
+        }
+        finally { Changed?.Invoke(); }
     }
 
     public async Task<string> LogAsync(string id, int lines = 200, CancellationToken ct = default)
@@ -522,6 +556,15 @@ public sealed class WorkloadService : IAsyncDisposable
     }
 
     internal void Forget(string workloadId) { lock (_gate) { if (_state.Started.Remove(workloadId)) Save(); } }
+
+    private readonly ConcurrentDictionary<string, int> _stopLeft = new();
+
+    /// <summary>A stop of this profile ended without its process ending: the profile then offers to end that process.</summary>
+    internal void NoteStopLeft(string profileId, int pid) => _stopLeft[profileId] = pid;
+
+    internal int? StopLeft(string profileId) => _stopLeft.TryGetValue(profileId, out var pid) ? pid : null;
+
+    internal void ForgetStopLeft(string profileId) => _stopLeft.TryRemove(profileId, out _);
 
     internal bool StartedByAvamux(string workloadId) { lock (_gate) return _state.Started.ContainsKey(workloadId); }
 

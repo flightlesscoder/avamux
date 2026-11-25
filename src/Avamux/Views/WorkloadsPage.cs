@@ -30,7 +30,7 @@ public sealed class WorkloadsPage : UserControl, IPage, ISubPage
     private readonly ScrollViewer _scroll;
     private readonly StackPanel _modelsPanel;
     private Tab _tab = Tab.Running;
-    private bool _listing, _scanning;
+    private bool _listing, _scanning, _listAgain;
     private WorkloadOverview? _last;
     private List<ModelFile>? _modelList;
 
@@ -107,12 +107,15 @@ public sealed class WorkloadsPage : UserControl, IPage, ISubPage
 
     private void Refresh(bool force = false)
     {
-        if (_listing || !force && !Showing) return;
+        if (!force && !Showing) return;
+        // A forced refresh (something changed) that arrives during a listing runs after it, rather than being lost.
+        if (_listing) { _listAgain |= force; return; }
         _listing = true;
         Task.Run(() => Workloads.ListAsync()).ContinueWith(t => Dispatcher.UIThread.Post(() =>
         {
             _listing = false;
             if (t.IsCompletedSuccessfully) { _last = t.Result; Render(t.Result); }
+            if (_listAgain) { _listAgain = false; Refresh(force: true); }
         }));
     }
 
@@ -214,6 +217,8 @@ public sealed class WorkloadsPage : UserControl, IPage, ISubPage
         private readonly DispatcherTimer _logTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private string _actionsKey = "";
         private bool _busy, _reading;
+        /// <summary>What the row is doing at the user's request ("Stopping…"), shown until it has finished.</summary>
+        private string? _doing;
         private WorkloadEntry? _entry;
 
         public Border View { get; }
@@ -289,8 +294,8 @@ public sealed class WorkloadsPage : UserControl, IPage, ISubPage
                 _ => "",
             });
             _line.Text = Line(e);
-            _detail.Text = i.Detail ?? "";
-            _detail.IsVisible = !string.IsNullOrEmpty(i.Detail);
+            _detail.Text = _doing ?? i.Detail ?? "";
+            _detail.IsVisible = _detail.Text.Length > 0;
             _error.Text = i.Error ?? "";
             _error.IsVisible = !string.IsNullOrEmpty(i.Error);
             _progress.IsVisible = i.Progress is not null;
@@ -406,16 +411,20 @@ public sealed class WorkloadsPage : UserControl, IPage, ISubPage
             if (a.Confirm is { } question && !await Ui.ConfirmAsync(owner, a.Label, question, a.Label)) return;
             _busy = true;
             _actionsKey = "";
+            // Said straight away: a stop script can take half a minute (it waits for the server to let go of the GPU).
+            _doing = a.Id == WorkloadActions.Stop && e.Info.ProfileId is { } sp && Workloads.Profile(sp) is { StopScript.Length: > 0 } scripted
+                ? $"Stopping… (running {Path.GetFileName(scripted.StopScript)})" : a.Label + "…";
             Update(e);
             try
             {
                 var result = await Task.Run(() => Workloads.ActAsync(e.Id, a.Id));
                 if (result.Length > 0) Ui.Toast(_page, e.Info.Name, result);
             }
-            catch (Exception ex) { Ui.Toast(_page, $"{a.Label}: {e.Info.Name}", ex.GetBaseException().Message); }
+            catch (Exception ex) { Ui.Toast(_page, $"Could not {a.Label.ToLowerInvariant()} {e.Info.Name}", ex.GetBaseException().Message); }
             finally
             {
                 _busy = false;
+                _doing = null;
                 _actionsKey = "";
                 if (_entry is { } now) Update(now);
                 _page.Refresh(force: true);

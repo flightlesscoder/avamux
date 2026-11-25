@@ -17,7 +17,7 @@ public sealed class CommandProvider : IAiProvider
     public string Kind => KindId;
     public string DisplayName => "Other command line";
     public string Description => "Another coding agent's one-shot command line (Codex, Gemini CLI, opencode, aider …): best effort, not tested by avamux.";
-    public AiCapabilities Capabilities { get; } = new();
+    public AiCapabilities Capabilities { get; } = new() { EditReplies = true }; // each run is given the whole conversation
 
     /// <summary>Ready-made templates: {prompt} is the message, {model} the model (dropped with its flag when empty).</summary>
     public static readonly IReadOnlyList<(string Name, string Command, string Template, string Output)> Presets =
