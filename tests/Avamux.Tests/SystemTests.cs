@@ -177,6 +177,19 @@ public class SystemTests
     }
 
     [Fact]
+    public void A_file_time_of_zero_or_one_second_is_no_time()
+    {
+        var node = new DiskNode("f", DiskNodeKind.File, null);
+        Assert.Null(node.ModifiedTime);
+        node.Modified = DateTime.UnixEpoch.Ticks;                              // ostree
+        Assert.Null(node.ModifiedTime);
+        node.Modified = DateTime.UnixEpoch.AddSeconds(1).Ticks;                // Nix
+        Assert.Null(node.ModifiedTime);
+        node.Modified = new DateTime(2026, 11, 25, 12, 0, 0, DateTimeKind.Utc).Ticks;
+        Assert.Equal(new DateTime(2026, 11, 25, 12, 0, 0, DateTimeKind.Utc).ToLocalTime(), node.ModifiedTime);
+    }
+
+    [Fact]
     public void The_treemap_covers_every_pixel_with_areas_to_scale()
     {
         var root = new DiskNode("/r", DiskNodeKind.Folder, null) { State = DiskNodeState.Done };

@@ -112,6 +112,18 @@ public static class Hotkeys
                 E("Empty the terminal", "Ctrl+L"),
                 E("XAML tab: apply", "Ctrl+Enter"),
             ]),
+            new("AI Chat", null,
+            [
+                E("Send the message", "Enter"),
+                E("New line in the message", "Shift+Enter"),
+                E("Paste; copied pictures and files become attachments", ["Ctrl+V", "Shift+Insert", .. Cmd("⌘V")]),
+                E("Stop the reply being written", "Esc"),
+                E("New chat", "Ctrl+N"),
+                E("Model box: use the model name typed", "Enter"),
+                E("Editing a message or reply: send or save it", "Ctrl+Enter"),
+                E("Editing a message or reply: cancel", "Esc"),
+                E("Close an enlarged picture", "Esc"),
+            ]),
             new("Repositories", "Resolving a merge conflict.",
             [
                 E("Stop editing the result", "Esc"),

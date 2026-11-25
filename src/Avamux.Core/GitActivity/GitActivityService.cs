@@ -282,12 +282,7 @@ public sealed class GitActivityService : IDisposable
             }
             statuses[source.Id] = status;
         }
-        // The same repository from two sources (a clone in a folder and the organisation's copy) is read once.
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var all = new List<ActivityRepo>();
-        foreach (var source in config.Sources)
-            foreach (var r in bySource.GetValueOrDefault(source.Id) ?? [])
-                if (seen.Add(r.Identity) && seen.Add(r.Key)) all.Add(r);
+        var all = ReadOnce(config.Sources.SelectMany(s => bySource.GetValueOrDefault(s.Id) ?? []));
         lock (_gate)
         {
             _discovered = new DiscoveredRepos { Repos = all, Sources = config.Sources.Select(s => statuses.GetValueOrDefault(s.Id) ?? new SourceStatus { Id = s.Id }).ToList() };
@@ -295,6 +290,24 @@ public sealed class GitActivityService : IDisposable
             _engine = null;
         }
         ConfigChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// The same repository from two sources (a clone in a folder and the organisation's copy) is read once: the first
+    /// one listed, matched by its web address or its key. A repository with no remote has its key as its identity.
+    /// </summary>
+    public static List<ActivityRepo> ReadOnce(IEnumerable<ActivityRepo> repos)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var all = new List<ActivityRepo>();
+        foreach (var r in repos)
+        {
+            if (seen.Contains(r.Identity) || seen.Contains(r.Key)) continue;
+            seen.Add(r.Identity);
+            seen.Add(r.Key);
+            all.Add(r);
+        }
+        return all;
     }
 
     public void Cancel() { lock (_gate) _scan?.Cancel(); }

@@ -59,6 +59,20 @@ public class GitActivityTests : IDisposable
     private static GitActivityConfig Config() => new() { Days = 61 };
 
     [Fact]
+    public void Repositories_without_a_remote_are_read_and_one_listed_twice_is_read_once()
+    {
+        var a = new ActivityRepo { Key = "local:/code/a", Kind = ActivitySource.Local, Name = "a", LocalPath = "/code/a" };
+        var b = new ActivityRepo { Key = "local:/code/b", Kind = ActivitySource.Local, Name = "b", LocalPath = "/code/b" };
+        var clone = new ActivityRepo { Key = "local:/code/app", Kind = ActivitySource.Local, Name = "app", CloneUrl = "git@github.com:org/app.git" };
+        var hosted = new ActivityRepo { Key = "github:github.com/org/app", Kind = ActivitySource.GitHub, Name = "org/app", WebUrl = "https://github.com/org/app" };
+        var again = new ActivityRepo { Key = "local:/code/a", Kind = ActivitySource.RepositoriesPage, Name = "a", LocalPath = "/code/a" };
+
+        var read = GitActivityService.ReadOnce([a, b, clone, hosted, again]);
+
+        Assert.Equal(["a", "b", "app"], read.Select(r => r.Name));
+    }
+
+    [Fact]
     public async Task A_local_repository_is_read_with_branches_people_AI_languages_and_frameworks()
     {
         var dir = MakeRepo();

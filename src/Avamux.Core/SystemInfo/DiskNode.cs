@@ -39,6 +39,12 @@ public sealed class DiskNode(string name, DiskNodeKind kind, DiskNode? parent)
     public long Folders;
     /// <summary>Last modified, UTC ticks.</summary>
     public long Modified;
+    /// <summary>
+    /// When it was last modified, in local time, or null when no real time was kept: unknown, or a time on the first
+    /// day of 1970, which image-based systems (ostree, Nix) give every file on purpose.
+    /// </summary>
+    public DateTime? ModifiedTime => Modified > DateTime.UnixEpoch.Ticks + TimeSpan.TicksPerDay
+        ? new DateTime(Modified, DateTimeKind.Utc).ToLocalTime() : null;
     /// <summary>Index into the scan's extension table (files only).</summary>
     public short Ext;
     private volatile DiskNode[] _children = [];
