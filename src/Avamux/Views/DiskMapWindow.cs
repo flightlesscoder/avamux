@@ -449,7 +449,7 @@ public sealed class DiskMapWindow : AppWindow
             DiskNodeKind.Mount => "another file system is mounted here (not included)",
             _ => "file",
         };
-        var modified = n.Modified > 0 ? $" · modified {new DateTime(n.Modified, DateTimeKind.Utc).ToLocalTime():yyyy-MM-dd HH:mm}" : "";
+        var modified = n.ModifiedTime is { } when ? $" · modified {when:yyyy-MM-dd HH:mm}" : "";
         _status.Text = $"{n.FullPath}  —  {Fmt.Bytes(n.Size)}{share} · {what}{modified}";
     }
 
@@ -524,7 +524,7 @@ public sealed class DiskMapWindow : AppWindow
             _share!.Value = parent is { Size: > 0 } p ? Node.Size / (double)p.Size : 0;
             ToolTip.SetTip(_share, parent is { Size: > 0 } q ? Fmt.Percent(Node.Size / (double)q.Size) + " of this folder" : null);
             _files!.Text = Node.IsFolder ? Fmt.Count(Node.Files) : "";
-            _modified!.Text = Node.Modified > 0 ? new DateTime(Node.Modified, DateTimeKind.Utc).ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "";
+            _modified!.Text = Node.ModifiedTime is { } when ? when.ToString("yyyy-MM-dd HH:mm") : "—";
             _icon!.Data = Node.Kind switch
             {
                 DiskNodeKind.Folder or DiskNodeKind.Group => Icons.Folder, DiskNodeKind.Mount => Icons.Harddisk, DiskNodeKind.Link => Icons.OpenInNew, _ => Icons.File,
